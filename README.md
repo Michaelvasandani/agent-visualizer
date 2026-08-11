@@ -32,17 +32,23 @@ Connect the interactive Codex TUI in a second terminal:
 codex --remote ws://127.0.0.1:4500
 ```
 
-Once that server has exactly one loaded thread, attach the Tracer from a third
-terminal:
+Attach the Tracer from a third terminal:
 
 ```sh
 npm start -- trace --server ws://127.0.0.1:4500
 ```
 
-The Tracer initializes, lists loaded threads, resumes the sole thread as a
-passive subscriber, and renders user, tool, and command activity as append-only
-terminal Events. It does not start, steer, interrupt, or otherwise control the
-observed Skill Run.
+The Tracer initializes and lists loaded threads. It selects a sole loaded thread
+automatically; when several are loaded, it displays every thread ID and waits
+for an explicit numbered selection. It never guesses from recency.
+
+After the selected thread is resumed as a passive subscriber, the Tracer
+reconstructs available history before rendering buffered and subsequent live
+activity. Historical and live observations pass through the same Event pipeline,
+which suppresses duplicate lifecycle Events and prints stable Event identity,
+per-thread sequence, and causal turn metadata. The Tracer does not start, steer,
+interrupt, or otherwise control the observed Skill Run, and unsubscribing does
+not affect the run.
 
 The Live Trace is deliberately unredacted. Prompts, credentials, paths,
 proprietary content, personal data, and future evaluation inputs may appear in

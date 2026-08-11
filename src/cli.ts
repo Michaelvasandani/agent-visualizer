@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
+import { createInterface } from "node:readline/promises";
+
 import { requireSupportedCodexVersion } from "./codex-version.js";
-import { traceOnlyLoadedThread } from "./live-trace.js";
+import { traceLoadedThread } from "./live-trace.js";
 import { runForegroundSharedServer } from "./shared-server.js";
 
 async function main(args: readonly string[]): Promise<void> {
@@ -14,7 +16,11 @@ async function main(args: readonly string[]): Promise<void> {
 
   if (command === "trace") {
     const serverUrl = readOption(args.slice(1), "--server");
-    await traceOnlyLoadedThread(serverUrl, (line) => process.stdout.write(`${line}\n`));
+    await traceLoadedThread(
+      serverUrl,
+      (line) => process.stdout.write(`${line}\n`),
+      promptForLoadedThread,
+    );
     return;
   }
 
@@ -23,6 +29,27 @@ async function main(args: readonly string[]): Promise<void> {
     serverUrl,
     (line) => process.stdout.write(`${line}\n`),
   );
+}
+
+async function promptForLoadedThread(
+  threadIds: readonly string[],
+): Promise<string> {
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    while (true) {
+      const answer = await prompt.question(
+        `Select a loaded thread [1-${threadIds.length}]: `,
+      );
+      const selectedIndex = Number(answer.trim()) - 1;
+      const selectedThreadId = threadIds[selectedIndex];
+      if (Number.isInteger(selectedIndex) && selectedThreadId !== undefined) {
+        return selectedThreadId;
+      }
+      process.stdout.write("Enter one of the listed thread numbers.\n");
+    }
+  } finally {
+    prompt.close();
+  }
 }
 
 function readOption(args: readonly string[], name: string): string {
