@@ -69,12 +69,21 @@ function respondToEvaluationRun(
   fixture: {
     readonly obligations: readonly Record<string, unknown>[];
     readonly additionalItems?: readonly Record<string, unknown>[];
+    readonly findings?: readonly Record<string, unknown>[];
     readonly threadId?: string;
     readonly turnId?: string;
   },
 ): boolean {
-  const threadId = fixture.threadId ?? "fixture-evaluation-thread";
-  const turnId = fixture.turnId ?? "fixture-evaluation-turn";
+  const params = request.params as Record<string, unknown> | undefined;
+  const isConformanceRun =
+    (JSON.stringify(params?.outputSchema) ?? "").includes('"findings"') ||
+    String(params?.baseInstructions).includes("evaluate Conformance");
+  const threadId = isConformanceRun
+    ? `${fixture.threadId ?? "fixture-evaluation-thread"}-conformance`
+    : fixture.threadId ?? "fixture-evaluation-thread";
+  const turnId = isConformanceRun
+    ? `${fixture.turnId ?? "fixture-evaluation-turn"}-conformance`
+    : fixture.turnId ?? "fixture-evaluation-turn";
   if (request.method === "thread/start") {
     socket.send(
       JSON.stringify({
@@ -94,6 +103,34 @@ function respondToEvaluationRun(
     }),
   );
   setImmediate(() => {
+    const input = (params?.input as readonly Record<string, unknown>[] | undefined)?.[0];
+    const promptText = typeof input?.text === "string" ? input.text : "";
+    const promptPayload = promptText.split("\n").at(-1);
+    const prompt =
+      promptPayload === undefined || promptPayload === ""
+        ? null
+        : (JSON.parse(promptPayload) as {
+            readonly events?: readonly { readonly id?: string }[];
+          });
+    const defaultEvidenceEventId = prompt?.events?.[0]?.id;
+    const findings =
+      fixture.findings ??
+      fixture.obligations
+        .filter((obligation) => obligation.status === "evaluable")
+        .map((obligation) => ({
+          obligationId: obligation.id,
+          state: "unobservable",
+          evidenceEventIds:
+            defaultEvidenceEventId === undefined
+              ? []
+              : [defaultEvidenceEventId],
+          explanation: "The fixture does not provide reporting coverage.",
+          assessment: {
+            observationGapAffected: false,
+            eventSourceCoverage: "limited",
+            violationBasis: "none",
+          },
+        }));
     socket.send(
       JSON.stringify({
         method: "item/completed",
@@ -103,12 +140,16 @@ function respondToEvaluationRun(
           item: {
             type: "agentMessage",
             id: "fixture-evaluation-message",
-            text: JSON.stringify({ obligations: fixture.obligations }),
+            text: JSON.stringify(
+              isConformanceRun
+                ? { findings }
+                : { obligations: fixture.obligations },
+            ),
           },
         },
       }),
     );
-    for (const item of fixture.additionalItems ?? []) {
+    for (const item of isConformanceRun ? [] : fixture.additionalItems ?? []) {
       socket.send(
         JSON.stringify({
           method: "item/completed",
@@ -234,6 +275,149 @@ async function runObligationValidationFixture(
           }),
         );
       } else if (respondToEvaluationRun(socket, request, { obligations })) {
+        return;
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+
+  try {
+    const address = server.address() as AddressInfo;
+    return await runCli(
+      ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+      { codexVersion: "codex-cli 0.145.0" },
+    );
+  } finally {
+    server.close();
+  }
+}
+
+function conformanceValidationObligations(
+  skillPath: string,
+): readonly Record<string, unknown>[] {
+  return [
+    "Call the release tool once.",
+    "Do not call the release tool with dry-run disabled.",
+    "Record every ambient filesystem mutation.",
+    "If a deployment occurs, notify the release channel.",
+    "Handle any exceptional circumstances appropriately.",
+  ].map((instruction, index) =>
+    index === 4
+      ? {
+          id: "ambiguous-5",
+          status: "ambiguous",
+          source: { path: skillPath, instruction },
+          ambiguity: "Exceptional circumstances are not defined.",
+        }
+      : {
+          id: `obligation-${index + 1}`,
+          status: "evaluable",
+          source: { path: skillPath, instruction },
+          observableBehavior: `Observable behavior ${index + 1}.`,
+        },
+  );
+}
+
+async function runConformanceValidationFixture(options: {
+  readonly status?: "completed" | "failed" | "interrupted";
+  readonly itemsView?: "summary";
+  readonly findings?: readonly Record<string, unknown>[];
+}): Promise<CliResult> {
+  const skillPath = path.join(
+    repositoryRoot,
+    "test",
+    "fixtures",
+    "skills",
+    "conformance-fixture",
+    "SKILL.md",
+  );
+  const obligations = conformanceValidationObligations(skillPath);
+  const status = options.status ?? "completed";
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  server.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["validation-observed-thread"], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume") {
+        socket.send(
+          JSON.stringify({
+            method: "item/started",
+            params: {
+              threadId: "validation-observed-thread",
+              turnId: "validation-observed-turn",
+              item: {
+                type: "userMessage",
+                id: "validation-user",
+                content: [
+                  { type: "skill", name: "conformance-fixture", path: skillPath },
+                ],
+              },
+            },
+          }),
+        );
+        const turns =
+          options.itemsView === "summary"
+            ? [
+                {
+                  id: "validation-observed-turn",
+                  status,
+                  itemsView: "summary",
+                  items: [],
+                },
+              ]
+            : [];
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              thread: { id: "validation-observed-thread", turns },
+            },
+          }),
+        );
+        if (options.itemsView !== "summary") {
+          setImmediate(() => {
+            socket.send(
+              JSON.stringify({
+                method: "turn/completed",
+                params: {
+                  threadId: "validation-observed-thread",
+                  turn: {
+                    id: "validation-observed-turn",
+                    status,
+                    error:
+                      status === "failed"
+                        ? { message: "fixture failure" }
+                        : null,
+                    items: [],
+                  },
+                },
+              }),
+            );
+          });
+        }
+      } else if (
+        respondToEvaluationRun(socket, request, {
+          obligations,
+          ...(options.findings === undefined
+            ? {}
+            : { findings: options.findings }),
+        })
+      ) {
         return;
       } else if (request.method === "thread/unsubscribe") {
         socket.send(JSON.stringify({ id: request.id, result: {} }));
@@ -1524,6 +1708,9 @@ test("uses exact live Root Skill metadata to construct the recursive execution-o
       "thread/start",
       "turn/start",
       "thread/unsubscribe",
+      "thread/start",
+      "turn/start",
+      "thread/unsubscribe",
       "thread/unsubscribe",
     ],
   );
@@ -1710,7 +1897,7 @@ test("compiles source-linked Obligations in an isolated Evaluation Run", async (
       .map((request) =>
         (request.params as { threadId?: unknown } | undefined)?.threadId,
       ),
-    ["evaluation-thread", "observed-thread"],
+    ["evaluation-thread", "evaluation-thread-conformance", "observed-thread"],
   );
   assert.equal(
     requests.some(
@@ -1778,6 +1965,314 @@ test("rejects an Evaluation Run that omits a contract instruction", async () => 
 
   assert.equal(result.exitCode, 1);
   assert.match(result.stderr, /omitted a Skill Contract instruction/i);
+});
+
+test("evaluates every evaluable Obligation after termination and explains all Finding states", async (t) => {
+  const requests: Array<Record<string, unknown>> = [];
+  let terminalNotificationSent = false;
+  const skillPath = path.join(
+    repositoryRoot,
+    "test",
+    "fixtures",
+    "skills",
+    "conformance-fixture",
+    "SKILL.md",
+  );
+  const obligations = conformanceValidationObligations(skillPath);
+  const userEventId = "observed-thread/observed-turn/observed-user/started";
+  const toolEventId = "observed-thread/observed-turn/release-call/completed";
+  const findings = [
+    {
+      obligationId: "obligation-1",
+      state: "satisfied",
+      evidenceEventIds: [toolEventId],
+      explanation: "The release tool was called once.",
+      assessment: {
+        observationGapAffected: false,
+        eventSourceCoverage: "fully-reported",
+        violationBasis: "none",
+      },
+    },
+    {
+      obligationId: "obligation-2",
+      state: "violated",
+      evidenceEventIds: [toolEventId],
+      explanation: "The workflow failed.",
+      assessment: {
+        observationGapAffected: false,
+        eventSourceCoverage: "fully-reported",
+        violationBasis: "contradiction",
+      },
+    },
+    {
+      obligationId: "obligation-3",
+      state: "unobservable",
+      evidenceEventIds: [userEventId],
+      explanation:
+        "Ambient filesystem mutations are outside explicit File Change reporting coverage.",
+      assessment: {
+        observationGapAffected: false,
+        eventSourceCoverage: "limited",
+        violationBasis: "none",
+      },
+    },
+    {
+      obligationId: "obligation-4",
+      state: "not applicable",
+      evidenceEventIds: [userEventId],
+      explanation: "No deployment condition arose.",
+      assessment: {
+        observationGapAffected: false,
+        eventSourceCoverage: "fully-reported",
+        violationBasis: "none",
+      },
+    },
+  ];
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+
+  server.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      requests.push(request);
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["observed-thread"], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { thread: { id: "observed-thread", turns: [] } },
+          }),
+        );
+        setImmediate(() => {
+          for (const notification of [
+            {
+              method: "item/started",
+              params: {
+                threadId: "observed-thread",
+                turnId: "observed-turn",
+                item: {
+                  type: "userMessage",
+                  id: "observed-user",
+                  content: [
+                    { type: "skill", name: "conformance-fixture", path: skillPath },
+                  ],
+                },
+              },
+            },
+            {
+              method: "item/completed",
+              params: {
+                threadId: "observed-thread",
+                turnId: "observed-turn",
+                item: {
+                  type: "mcpToolCall",
+                  id: "release-call",
+                  server: "release",
+                  tool: "publish",
+                  status: "completed",
+                  arguments: { dryRun: false },
+                  result: { content: [{ type: "text", text: "published" }] },
+                },
+              },
+            },
+            {
+              method: "turn/completed",
+              params: {
+                threadId: "observed-thread",
+                turn: { id: "observed-turn", status: "completed", items: [] },
+              },
+            },
+          ]) {
+            socket.send(JSON.stringify(notification));
+          }
+          terminalNotificationSent = true;
+        });
+      } else if (request.method === "thread/start") {
+        const baseInstructions = String(
+          (request.params as Record<string, unknown>).baseInstructions,
+        );
+        if (baseInstructions.includes("evaluate Conformance")) {
+          assert.equal(terminalNotificationSent, true);
+        }
+        respondToEvaluationRun(socket, request, { obligations, findings });
+      } else if (respondToEvaluationRun(socket, request, { obligations, findings })) {
+        return;
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+  const result = await runCli(
+    ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+    { codexVersion: "codex-cli 0.145.0" },
+  );
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(
+    result.stdout,
+    /\[Finding obligation-1\] state=satisfied.*instruction="Call the release tool once\.".*observableBehavior="Observable behavior 1\.".*evidence=.*release-call\/completed.*Cited Evidence supports this Obligation/i,
+  );
+  assert.match(result.stdout, /\[Finding obligation-2\] state=violated/);
+  assert.match(result.stdout, /\[Finding obligation-3\] state=unobservable/);
+  assert.match(result.stdout, /\[Finding obligation-4\] state=not applicable/);
+  assert.doesNotMatch(result.stdout, /\[Finding ambiguous-5\]/);
+  assert.match(
+    result.stdout,
+    /Finding summary: satisfied=1 violated=1 unobservable=1 not applicable=1/,
+  );
+  assert.match(result.stdout, /Important Finding: obligation=obligation-2 state=violated/);
+  assert.match(result.stdout, /Important Finding: obligation=obligation-3 state=unobservable/);
+  assert.doesNotMatch(result.stdout, /overall|score|pass\/fail|verdict/i);
+  assert.doesNotMatch(result.stdout, /workflow failed/i);
+  assert.equal(
+    requests.filter((request) => request.method === "thread/start").length,
+    2,
+  );
+  assert.equal(
+    requests.filter((request) => request.method === "turn/start").length,
+    2,
+  );
+  assert.equal(
+    requests.some(
+      (request) =>
+        request.method === "turn/start" &&
+        (request.params as Record<string, unknown>).threadId === "observed-thread",
+    ),
+    false,
+  );
+  const conformanceTurn = requests
+    .filter((request) => request.method === "turn/start")
+    .find((request) => JSON.stringify(request.params).includes('"findings"'));
+  assert.match(JSON.stringify(conformanceTurn?.params), /observed-turn/);
+  assert.match(JSON.stringify(conformanceTurn?.params), /Call the release tool once/);
+  assert.match(JSON.stringify(conformanceTurn?.params), /release-call/);
+});
+
+test("rejects absence as violation when event-source reporting coverage is limited", async () => {
+  const result = await runConformanceValidationFixture({
+    findings: [
+      {
+        obligationId: "obligation-1",
+        state: "violated",
+        evidenceEventIds: [
+          "validation-observed-thread/validation-observed-turn/validation-user/started",
+        ],
+        explanation: "No release call was observed.",
+        assessment: {
+          observationGapAffected: false,
+          eventSourceCoverage: "limited",
+          violationBasis: "absence",
+        },
+      },
+    ],
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.match(
+    result.stderr,
+    /affected by a gap or coverage limitation and must be unobservable/i,
+  );
+});
+
+test("rejects absence as violation when the Trace has an observation gap", async () => {
+  const result = await runConformanceValidationFixture({
+    itemsView: "summary",
+    findings: [
+      {
+        obligationId: "obligation-1",
+        state: "violated",
+        evidenceEventIds: [
+          "validation-observed-thread/validation-observed-turn/validation-user/started",
+        ],
+        explanation: "No release call was observed.",
+        assessment: {
+          observationGapAffected: false,
+          eventSourceCoverage: "fully-reported",
+          violationBasis: "absence",
+        },
+      },
+    ],
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.match(
+    result.stderr,
+    /absence cannot support.*without a complete Trace/i,
+  );
+});
+
+test("rejects a Finding that omits its Evidence Event citation", async () => {
+  const result = await runConformanceValidationFixture({
+    findings: [
+      {
+        obligationId: "obligation-1",
+        state: "unobservable",
+        evidenceEventIds: [],
+        explanation: "Reporting coverage is limited.",
+        assessment: {
+          observationGapAffected: false,
+          eventSourceCoverage: "limited",
+          violationBasis: "none",
+        },
+      },
+    ],
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /must cite at least one Evidence Event/i);
+});
+
+test("rejects a Finding explanation containing a run-level conclusion", async () => {
+  const result = await runConformanceValidationFixture({
+    findings: [
+      {
+        obligationId: "obligation-1",
+        state: "satisfied",
+        evidenceEventIds: [
+          "validation-observed-thread/validation-observed-turn/validation-user/started",
+        ],
+        explanation: "Overall, the Skill Run passed.",
+        assessment: {
+          observationGapAffected: false,
+          eventSourceCoverage: "fully-reported",
+          violationBasis: "none",
+        },
+      },
+    ],
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /run-level conclusion, score, or verdict/i);
+});
+
+test("evaluates failed and cancelled Skill Runs after their terminal outcomes", async () => {
+  const failed = await runConformanceValidationFixture({ status: "failed" });
+  const cancelled = await runConformanceValidationFixture({
+    status: "interrupted",
+  });
+
+  assert.equal(failed.exitCode, 0, failed.stderr);
+  assert.match(failed.stdout, /Skill Run terminal outcome: failed/);
+  assert.match(failed.stdout, /\[Finding obligation-1\]/);
+  assert.equal(cancelled.exitCode, 0, cancelled.stderr);
+  assert.match(cancelled.stdout, /Skill Run terminal outcome: cancelled/);
+  assert.match(cancelled.stdout, /\[Finding obligation-1\]/);
 });
 
 test("requires confirmation before using a history-only Root Skill candidate", async (t) => {
@@ -1922,6 +2417,9 @@ test("requires confirmation before using a history-only Root Skill candidate", a
       "thread/loaded/list",
       "thread/resume",
       "skills/list",
+      "thread/start",
+      "turn/start",
+      "thread/unsubscribe",
       "thread/start",
       "turn/start",
       "thread/unsubscribe",

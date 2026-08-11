@@ -1,4 +1,5 @@
 import { AppServerClient } from "./app-server-client.js";
+import { evaluateConformance, renderFindings } from "./conformance.js";
 import { compileObligations, renderObligations } from "./obligation.js";
 import {
   constructSkillContract,
@@ -12,6 +13,7 @@ import {
   type NormalizedEvent,
   type TraceEventKind,
 } from "./trace-event.js";
+import type { TerminalOutcome, TraceGap } from "./trace-observation.js";
 
 interface LoadedThreadsResponse {
   readonly data: readonly string[];
@@ -66,20 +68,6 @@ interface ThreadObservation {
   readonly events: readonly NormalizedEvent[];
   readonly gaps: readonly TraceGap[];
   readonly terminalOutcome: TerminalOutcome;
-}
-
-type TerminalOutcome =
-  | { readonly kind: "completed" | "cancelled" }
-  | { readonly kind: "failed"; readonly error: unknown };
-
-interface TraceGap {
-  readonly afterEventId: string | null;
-  readonly historyBoundary:
-    | "initial history"
-    | "reconnect history"
-    | "failed history recovery";
-  readonly sources: readonly string[];
-  readonly reason: string;
 }
 
 interface RecoveryCheckpoint {
@@ -141,6 +129,14 @@ export async function traceLoadedThread(
       for (const line of renderSkillContract(contract)) writeLine(line);
       const obligations = await compileObligations(client, contract);
       for (const line of renderObligations(obligations)) writeLine(line);
+      const findings = await evaluateConformance(client, {
+        rootSkillPath: rootSkill.path,
+        obligations,
+        events: observation.events,
+        gaps: observation.gaps,
+        terminalOutcome: observation.terminalOutcome,
+      });
+      for (const line of renderFindings(findings)) writeLine(line);
     }
     await client.request("thread/unsubscribe", { threadId });
   } finally {

@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { AppServerClient } from "./app-server-client.js";
+import { runStructuredEvaluation } from "./evaluation-run.js";
 import type {
   SkillContract,
   SkillContractSource,
@@ -27,14 +28,6 @@ export interface AmbiguousObligation {
 }
 
 export type Obligation = EvaluableObligation | AmbiguousObligation;
-
-interface ThreadStartResponse {
-  readonly thread: { readonly id: string };
-}
-
-interface TurnStartResponse {
-  readonly turn: { readonly id: string; readonly status?: string };
-}
 
 const EVALUATION_INSTRUCTIONS =
   "You compile Skill Contracts into structured execution Obligations. " +
@@ -81,91 +74,14 @@ export async function compileObligations(
   client: AppServerClient,
   contract: SkillContract,
 ): Promise<readonly Obligation[]> {
-  const bufferedNotifications: JsonObject[] = [];
-  let evaluationThreadId: string | null = null;
-  let evaluationTurnId: string | null = null;
-  let agentMessage: string | null = null;
-  let terminalError: Error | null = null;
-  let resolveCompletion: () => void = () => undefined;
-  const completion = new Promise<void>((resolve) => {
-    resolveCompletion = resolve;
+  const responseText = await runStructuredEvaluation(client, {
+    cwd: path.dirname(contract.rootSkill.path),
+    baseInstructions: EVALUATION_INSTRUCTIONS,
+    prompt: obligationPrompt(contract),
+    outputSchema: OBLIGATIONS_SCHEMA,
+    label: "Obligation Evaluation Run",
   });
-
-  const processNotification = (notification: JsonObject): void => {
-    if (evaluationThreadId === null) {
-      bufferedNotifications.push(notification);
-      return;
-    }
-    const params = asObject(notification.params);
-    if (params?.threadId !== evaluationThreadId) return;
-    if (
-      notification.method === "item/completed" &&
-      (evaluationTurnId === null || params.turnId === evaluationTurnId)
-    ) {
-      const item = asObject(params.item);
-      if (item?.type === "agentMessage" && typeof item.text === "string") {
-        agentMessage = item.text;
-      }
-    }
-    if (notification.method !== "turn/completed") return;
-    const turn = asObject(params.turn);
-    if (evaluationTurnId !== null && turn?.id !== evaluationTurnId) return;
-    if (turn?.status !== "completed") {
-      terminalError = new Error(
-        `Obligation Evaluation Run ended with status ${JSON.stringify(turn?.status)}.`,
-      );
-    }
-    resolveCompletion();
-  };
-
-  const removeHandler = client.onNotification(processNotification);
-  try {
-    const threadResponse = await client.request<ThreadStartResponse>(
-      "thread/start",
-      {
-        modelProvider: "openai",
-        cwd: path.dirname(contract.rootSkill.path),
-        approvalPolicy: "never",
-        sandbox: "read-only",
-        ephemeral: true,
-        baseInstructions: EVALUATION_INSTRUCTIONS,
-      },
-    );
-    evaluationThreadId = threadResponse.thread.id;
-    for (const notification of bufferedNotifications.splice(0)) {
-      processNotification(notification);
-    }
-
-    try {
-      const turnResponse = await client.request<TurnStartResponse>("turn/start", {
-        threadId: evaluationThreadId,
-        input: [
-          {
-            type: "text",
-            text: obligationPrompt(contract),
-            text_elements: [],
-          },
-        ],
-        outputSchema: OBLIGATIONS_SCHEMA,
-      });
-      evaluationTurnId = turnResponse.turn.id;
-      if (turnResponse.turn.status === "completed") resolveCompletion();
-      await completion;
-      if (terminalError !== null) throw terminalError;
-      if (agentMessage === null) {
-        throw new Error(
-          "Obligation Evaluation Run completed without a structured agent message.",
-        );
-      }
-      return parseObligations(agentMessage, contract.sources);
-    } finally {
-      await client.request("thread/unsubscribe", {
-        threadId: evaluationThreadId,
-      });
-    }
-  } finally {
-    removeHandler();
-  }
+  return parseObligations(responseText, contract.sources);
 }
 
 export function renderObligations(
