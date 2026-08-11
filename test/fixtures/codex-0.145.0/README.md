@@ -16,9 +16,11 @@ Evaluation Run isolation. It is explicitly not represented as a live failure
 capture.
 
 `live-code-review-saved-trace.json` is the sanitized, self-contained export
-from the completed manual acceptance run. It retains the terminal outcome,
-honest initial-history gap, exact Event/Obligation/Finding counts, and observed
-source identities while replacing local paths and opaque identifiers.
+from the completed manual acceptance workflow. It retains exactly one parent
+turn and one latest work turn from each causally spawned reviewer, along with
+the terminal outcome, honest initial-history gap, exact
+Event/Obligation/Finding counts, and observed source identities while replacing
+local paths and opaque identifiers.
 
 The black-box tests in `test/cli.test.ts` replay captured 0.145.0 envelopes and
 script deterministic fault conditions. Faults such as connection loss and

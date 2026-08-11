@@ -39,7 +39,9 @@ interface FaultInjectionFixture {
   };
   readonly reconnect: {
     readonly liveNotification: Record<string, unknown>;
-    readonly recoveredThread: Record<string, unknown>;
+    readonly recoveredThread: Record<string, unknown> & {
+      readonly turns: readonly Record<string, unknown>[];
+    };
   };
   readonly evaluationRuns: {
     readonly obligationThreadId: string;
@@ -1257,9 +1259,19 @@ test("commits sanitized Saved Trace evidence for the real code-review acceptance
     };
     readonly terminalOutcome: { readonly kind: string };
     readonly traceIntegrity: { readonly complete: boolean };
-    readonly events: readonly { readonly sourceId: string }[];
+    readonly events: readonly {
+      readonly id: string;
+      readonly sourceId: string;
+      readonly payload: {
+        readonly turnId?: string;
+        readonly turn?: { readonly id?: string };
+      };
+    }[];
     readonly obligations: readonly unknown[];
-    readonly findings: readonly { readonly state: string }[];
+    readonly findings: readonly {
+      readonly state: string;
+      readonly evidenceEventIds: readonly string[];
+    }[];
   };
 
   assert.equal(evidence.schemaVersion, 1);
@@ -1270,7 +1282,7 @@ test("commits sanitized Saved Trace evidence for the real code-review acceptance
   assert.equal(evidence.terminalOutcome.kind, "completed");
   assert.equal(evidence.traceIntegrity.complete, false);
   assert.equal(evidence.events.length, 15);
-  assert.equal(evidence.obligations.length, 19);
+  assert.equal(evidence.obligations.length, 17);
   assert.deepEqual(
     Object.fromEntries(
       ["satisfied", "unobservable", "not applicable", "violated"].map(
@@ -1280,9 +1292,44 @@ test("commits sanitized Saved Trace evidence for the real code-review acceptance
         ],
       ),
     ),
-    { satisfied: 14, unobservable: 3, "not applicable": 2, violated: 0 },
+    { satisfied: 16, unobservable: 0, "not applicable": 1, violated: 0 },
   );
-  assert.equal(new Set(evidence.events.map((event) => event.sourceId)).size, 1);
+  assert.deepEqual(
+    [...new Set(evidence.events.map((event) => event.sourceId))].sort(),
+    [
+      "captured-parent-thread",
+      "captured-spec-thread",
+      "captured-standards-thread",
+    ],
+  );
+  const turnsBySource = new Map<string, Set<string>>();
+  for (const event of evidence.events) {
+    const turnId = event.payload.turnId ?? event.payload.turn?.id;
+    if (turnId === undefined) continue;
+    const turns = turnsBySource.get(event.sourceId) ?? new Set<string>();
+    turns.add(turnId);
+    turnsBySource.set(event.sourceId, turns);
+  }
+  assert.deepEqual(
+    Object.fromEntries(
+      [...turnsBySource].map(([sourceId, turns]) => [
+        sourceId,
+        [...turns],
+      ]),
+    ),
+    {
+      "captured-parent-thread": ["captured-code-review-turn"],
+      "captured-standards-thread": ["captured-standards-turn"],
+      "captured-spec-thread": ["captured-spec-turn"],
+    },
+  );
+  const eventIds = new Set(evidence.events.map((event) => event.id));
+  assert.equal(
+    evidence.findings.every((finding) =>
+      finding.evidenceEventIds.every((eventId) => eventIds.has(eventId)),
+    ),
+    true,
+  );
   assert.doesNotMatch(JSON.stringify(evidence), /michaelvasandani|\/Users\//i);
 });
 
@@ -1313,6 +1360,20 @@ test("marks partial descendant history as an Incomplete Trace", async (t) => {
         request.method === "thread/resume" &&
         params?.threadId === "partial-parent"
       ) {
+        socket.send(
+          JSON.stringify({
+            method: "item/completed",
+            params: {
+              threadId: "partial-parent",
+              turnId: "unrelated-buffered-turn",
+              item: {
+                type: "agentMessage",
+                id: "unrelated-buffered-message",
+                text: "must-not-mix-a-buffered-skill-run",
+              },
+            },
+          }),
+        );
         socket.send(
           JSON.stringify({
             id: request.id,
@@ -1377,6 +1438,18 @@ test("marks partial descendant history as an Incomplete Trace", async (t) => {
                 id: "partial-child",
                 turns: [
                   {
+                    id: "unrelated-earlier-child-turn",
+                    itemsView: "full",
+                    status: "completed",
+                    items: [
+                      {
+                        type: "agentMessage",
+                        id: "unrelated-earlier-child-message",
+                        text: "must-not-mix-earlier-child-history",
+                      },
+                    ],
+                  },
+                  {
                     id: "partial-child-turn",
                     itemsView: "summary",
                     status: "completed",
@@ -1417,6 +1490,8 @@ test("marks partial descendant history as an Incomplete Trace", async (t) => {
     /must-not-contaminate-the-finished-skill-run/,
   );
   assert.doesNotMatch(result.stdout, /must-not-mix-an-earlier-skill-run/);
+  assert.doesNotMatch(result.stdout, /must-not-mix-a-buffered-skill-run/);
+  assert.doesNotMatch(result.stdout, /must-not-mix-earlier-child-history/);
 });
 
 test("reports failed and cancelled Skill Run outcomes without calling them Incomplete Traces", async (t) => {
@@ -1545,7 +1620,25 @@ test("reconnects, recovers all available item history, and deduplicates activity
           JSON.stringify({
             id: request.id,
             result: {
-              thread: faultFixture.reconnect.recoveredThread,
+              thread: {
+                ...faultFixture.reconnect.recoveredThread,
+                turns: [
+                  ...faultFixture.reconnect.recoveredThread.turns,
+                  {
+                    id: "later-unrelated-turn",
+                    status: "completed",
+                    itemsView: "full",
+                    error: null,
+                    items: [
+                      {
+                        id: "later-unrelated-message",
+                        type: "agentMessage",
+                        text: "must-not-switch-skill-runs-during-recovery",
+                      },
+                    ],
+                  },
+                ],
+              },
             },
           }),
         );
@@ -1567,6 +1660,10 @@ test("reconnects, recovers all available item history, and deduplicates activity
   assert.match(result.stdout, /Available item history recovery complete/);
   assert.match(result.stdout, /recovered output/);
   assert.equal(result.stdout.match(/recover this trace/g)?.length, 1);
+  assert.doesNotMatch(
+    result.stdout,
+    /must-not-switch-skill-runs-during-recovery/,
+  );
   assert.match(result.stdout, /Skill Run terminal outcome: completed/);
   assert.match(
     result.stdout,

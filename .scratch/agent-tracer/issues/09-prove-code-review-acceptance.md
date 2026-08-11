@@ -6,7 +6,7 @@
 
 **Status:** ready-for-human
 
-- [x] Captured Codex 0.145.0 fixtures cover live events, history replay, concurrency, attribution, resource updates, failures, cancellation, reconnect recovery, Unknown Events, and Evaluation Runs.
+- [x] Captured Codex 0.145.0 fixtures cover live events, history replay, concurrency, attribution, resource updates, Unknown Events, reviewer histories, and a real Evaluation result; file-backed deterministic fault-injection fixtures cover failures, cancellation, reconnect recovery, and Evaluation protocol isolation without claiming those synthetic values came from the manual run.
 - [x] The black-box suite verifies terminal output, selection and confirmation prompts, exit status, passive observation, and Saved Trace output using those fixtures.
 - [x] A real shared App Server and interactive TUI complete a `$code-review` Skill Run while the Tracer is attached.
 - [x] The live acceptance run shows tool calls, commands, File Changes, subagent activity, token usage, durations, and a post-run Conformance report when Codex emits those categories.
@@ -47,3 +47,9 @@
   unreconstructed child gaps affect only that child source. The Tracer stops
   accepting root notifications at terminal outcome before descendant replay,
   and mixed required/example references are classified independently.
+- The final isolated evidence replay uses one parent turn and one latest turn
+  from each causally spawned reviewer. Root activity is filtered by the pinned
+  turn id before and after reconnect, inherited earlier child turns are
+  excluded, and the sanitized Saved Trace contains 15 Events across exactly
+  three sources. Its 17 Findings are 16 satisfied, 1 not applicable, and 0
+  violated or unobservable.

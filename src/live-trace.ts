@@ -258,11 +258,17 @@ async function observeResumedThread(
   let client = initialClient;
   let cwd: string | null = null;
   let recoveryCheckpoint: RecoveryCheckpoint | null = null;
+  let selectedTurnId: string | null = null;
 
   while (true) {
     let result: Awaited<ReturnType<typeof observeConnection>>;
     try {
-      result = await observeConnection(client, threadId, pipeline);
+      result = await observeConnection(
+        client,
+        threadId,
+        pipeline,
+        selectedTurnId,
+      );
     } catch (error) {
       if (recoveryCheckpoint === null) throw error;
       const failureGap = recoveryFailureGap(recoveryCheckpoint, error);
@@ -270,6 +276,7 @@ async function observeResumedThread(
       client.close();
       throw error;
     }
+    selectedTurnId = result.selectedTurnId;
     cwd = result.response.cwd ?? result.response.thread.cwd ?? cwd;
     const isRecovery = recoveryCheckpoint !== null;
     const historyCheckpoint = recoveryCheckpoint ?? {
@@ -325,8 +332,10 @@ async function observeConnection(
   client: AppServerClient,
   threadId: string,
   pipeline: EventPipeline,
+  selectedTurnId: string | null,
 ): Promise<{
   readonly response: ThreadResumeResponse;
+  readonly selectedTurnId: string | null;
   readonly completeSourceIds: ReadonlySet<string>;
   readonly subscribedThreadIds: ReadonlySet<string>;
   readonly descendantHistoryGaps: readonly DescendantHistoryGap[];
@@ -340,11 +349,15 @@ async function observeConnection(
     resolveCompletion = resolve;
   });
 
+  let observedTurnId = selectedTurnId;
   const processNotification = (notification: JsonObject): void => {
     const params = asObject(notification.params);
     if (params === null) return;
     const method = notification.method;
     if (typeof method !== "string") return;
+    const scoped = scopeRootNotification(params, threadId, observedTurnId);
+    observedTurnId = scoped.selectedTurnId;
+    if (!scoped.include) return;
     pipeline.append(method, params, ["live"]);
     if (method === "turn/completed" && params.threadId === threadId) {
       liveTerminalOutcome = terminalOutcomeFromTurn(asObject(params.turn));
@@ -371,14 +384,32 @@ async function observeConnection(
       "thread/resume",
       { threadId },
     );
-    const selectedTurns = selectedSkillRunHistory(response.thread.turns);
+    const selectedHistory = selectedSkillRunHistory(
+      response.thread.turns,
+      observedTurnId,
+    );
+    observedTurnId = selectedHistory.turnId;
+    const selectedTurns = selectedHistory.turns;
     const selectedResponse: ThreadResumeResponse = {
       ...response,
       thread: { ...response.thread, turns: selectedTurns },
     };
-    pipeline.replay(threadId, selectedTurns, bufferedNotifications);
+    const selectedBufferedNotifications = bufferedNotifications.filter(
+      (notification) => {
+        const params = asObject(notification.params);
+        if (params === null) return true;
+        const scoped = scopeRootNotification(
+          params,
+          threadId,
+          observedTurnId,
+        );
+        observedTurnId = scoped.selectedTurnId;
+        return scoped.include;
+      },
+    );
+    pipeline.replay(threadId, selectedTurns, selectedBufferedNotifications);
     replayingHistory = false;
-    for (const notification of bufferedNotifications) {
+    for (const notification of selectedBufferedNotifications) {
       processNotification(notification);
     }
     const historicalOutcome = terminalOutcomeFromHistory(selectedTurns);
@@ -406,6 +437,7 @@ async function observeConnection(
     }
     return {
       response: selectedResponse,
+      selectedTurnId: observedTurnId,
       completeSourceIds: descendantReplay.completeSourceIds,
       subscribedThreadIds: descendantReplay.subscribedSourceIds,
       descendantHistoryGaps: descendantReplay.gaps,
@@ -438,7 +470,7 @@ async function replayDescendantHistories(
     }
     attemptedSourceIds.add(sourceId);
     if (
-      classifyLiveDescendantCoverage(
+      recordLiveDescendantCoverage(
         sourceId,
         pipeline,
         completeSourceIds,
@@ -454,8 +486,12 @@ async function replayDescendantHistories(
         { threadId: sourceId },
       );
       subscribedSourceIds.add(sourceId);
+      const selectedTurns = selectedSkillRunHistory(
+        response.thread.turns,
+        null,
+      ).turns;
       let historyIsFull = true;
-      for (const turn of response.thread.turns) {
+      for (const turn of selectedTurns) {
         if (turn.itemsView !== undefined && turn.itemsView !== "full") {
           historyIsFull = false;
           gaps.push({
@@ -465,7 +501,7 @@ async function replayDescendantHistories(
         }
       }
       if (
-        classifyLiveDescendantCoverage(
+        recordLiveDescendantCoverage(
           sourceId,
           pipeline,
           completeSourceIds,
@@ -475,7 +511,7 @@ async function replayDescendantHistories(
       ) {
         continue;
       }
-      pipeline.replay(sourceId, response.thread.turns, []);
+      pipeline.replay(sourceId, selectedTurns, []);
       if (historyIsFull) completeSourceIds.add(sourceId);
     } catch {
       // The root trace remains usable; gap reporting identifies this source.
@@ -483,7 +519,7 @@ async function replayDescendantHistories(
   }
 }
 
-function classifyLiveDescendantCoverage(
+function recordLiveDescendantCoverage(
   sourceId: string,
   pipeline: EventPipeline,
   completeSourceIds: Set<string>,
@@ -566,9 +602,49 @@ function selectedThreadItemHistoryIsFull(
 
 function selectedSkillRunHistory(
   turns: readonly HistoryTurn[],
-): readonly HistoryTurn[] {
-  const selectedTurn = turns.at(-1);
-  return selectedTurn === undefined ? [] : [selectedTurn];
+  selectedTurnId: string | null,
+): {
+  readonly turnId: string | null;
+  readonly turns: readonly HistoryTurn[];
+} {
+  const selectedTurn =
+    selectedTurnId === null
+      ? turns.at(-1)
+      : turns.find((turn) => turn.id === selectedTurnId);
+  if (
+    selectedTurnId !== null &&
+    selectedTurn === undefined &&
+    turns.length > 0
+  ) {
+    throw new Error(
+      `selected Skill Run turn ${selectedTurnId} is unavailable from resumed history`,
+    );
+  }
+  return selectedTurn === undefined
+    ? { turnId: selectedTurnId, turns: [] }
+    : { turnId: selectedTurn.id, turns: [selectedTurn] };
+}
+
+function notificationTurnId(params: JsonObject): string | null {
+  if (typeof params.turnId === "string") return params.turnId;
+  const turn = asObject(params.turn);
+  return typeof turn?.id === "string" ? turn.id : null;
+}
+
+function scopeRootNotification(
+  params: JsonObject,
+  rootThreadId: string,
+  selectedTurnId: string | null,
+): { readonly selectedTurnId: string | null; readonly include: boolean } {
+  if (params.threadId !== rootThreadId) {
+    return { selectedTurnId, include: true };
+  }
+  const turnId = notificationTurnId(params);
+  if (turnId === null) return { selectedTurnId, include: true };
+  if (selectedTurnId === null) {
+    return { selectedTurnId: turnId, include: true };
+  }
+  return { selectedTurnId, include: turnId === selectedTurnId };
 }
 
 function recoveryFailureGap(

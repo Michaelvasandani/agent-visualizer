@@ -49,183 +49,165 @@
   },
   "obligations": [
     {
-      "id": "obl-1",
+      "id": "OBL-001",
       "status": "evaluable",
       "source": {
         "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
         "instruction": "- **Standards** — does the code conform to this repo's documented coding standards?\n- **Spec** — does the code faithfully implement the originating issue / spec?"
       },
-      "observableBehavior": "Review the changed code independently on two axes: conformity with documented repository coding standards and fidelity to the originating issue or specification."
+      "observableBehavior": "Perform two distinct reviews of the change: one against documented repository coding standards and one against the originating issue or specification."
     },
     {
-      "id": "obl-2",
+      "id": "OBL-002",
       "status": "evaluable",
       "source": {
         "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
         "instruction": "Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings."
       },
-      "observableBehavior": "Run the Standards review and Spec review concurrently in separate sub-agents, then aggregate their reports."
+      "observableBehavior": "Run the Standards and Spec reviews concurrently in separate sub-agents, then aggregate their returned reports."
     },
     {
-      "id": "obl-3",
+      "id": "OBL-003",
       "status": "evaluable",
       "source": {
         "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
         "instruction": "The issue tracker should have been provided to you — run `/setup-matt-pocock-skills` if `docs/agents/issue-tracker.md` is missing."
       },
-      "observableBehavior": "Before issue-tracker lookup, check for `docs/agents/issue-tracker.md`; if it is missing, run `/setup-matt-pocock-skills`."
+      "observableBehavior": "Check for docs/agents/issue-tracker.md and, if it is absent, run /setup-matt-pocock-skills before continuing."
     },
     {
-      "id": "obl-4",
+      "id": "OBL-004",
       "status": "evaluable",
       "source": {
         "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
         "instruction": "Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it."
       },
-      "observableBehavior": "Use the revision named by the user as the fixed comparison point; if the user supplied no fixed point, ask them to provide one before reviewing."
+      "observableBehavior": "Use the revision reference supplied by the user as the fixed point; if none was supplied, ask the user to provide one."
     },
     {
-      "id": "obl-5",
+      "id": "OBL-005",
       "status": "evaluable",
       "source": {
         "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
         "instruction": "Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`."
       },
-      "observableBehavior": "Capture the change set using `git diff <fixed-point>...HEAD` and record the commits using `git log <fixed-point>..HEAD --oneline`."
+      "observableBehavior": "Capture the comparison using git diff <fixed-point>...HEAD and record the commits using git log <fixed-point>..HEAD --oneline."
     },
     {
-      "id": "obl-6",
+      "id": "OBL-006",
       "status": "evaluable",
       "source": {
         "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
         "instruction": "Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here — not inside two parallel sub-agents."
       },
-      "observableBehavior": "Before launching review sub-agents, run `git rev-parse <fixed-point>` and verify that the three-dot diff is non-empty; stop at this stage if the ref is invalid or the diff is empty."
+      "observableBehavior": "Before launching review sub-agents, validate the fixed point with git rev-parse <fixed-point> and verify that the three-dot diff is non-empty; stop on an invalid reference or empty diff."
     },
     {
-      "id": "obl-7",
+      "id": "OBL-007",
       "status": "evaluable",
       "source": {
         "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
         "instruction": "1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.) — fetch via the workflow in `docs/agents/issue-tracker.md`.\n2. A path the user passed as an argument.\n3. A spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.\n4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report \"no spec available\"."
       },
-      "observableBehavior": "Locate the review specification in this order: resolve issue references found in commit messages using `docs/agents/issue-tracker.md`; inspect any user-supplied path; search `docs/`, `specs/`, and `.scratch/` for a file matching the branch or feature; then ask the user where the spec is if none is found."
+      "observableBehavior": "Locate the specification by checking, in order, issue references in commit messages through the documented issue-tracker workflow, a user-supplied path, and matching files under docs/, specs/, or .scratch/. If none is found, ask the user for its location; if the user confirms none exists, arrange for the Spec review to be skipped and reported as \"no spec available\"."
     },
     {
-      "id": "obl-8",
-      "status": "evaluable",
-      "source": {
-        "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
-        "instruction": "1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.) — fetch via the workflow in `docs/agents/issue-tracker.md`.\n2. A path the user passed as an argument.\n3. A spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.\n4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report \"no spec available\"."
-      },
-      "observableBehavior": "If the user confirms that no specification exists, omit the Spec sub-agent and have the Spec report state `no spec available`."
-    },
-    {
-      "id": "obl-9",
+      "id": "OBL-008",
       "status": "evaluable",
       "source": {
         "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
         "instruction": "Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`."
       },
-      "observableBehavior": "Discover and use repository documents that prescribe how code should be written, including files such as `CODING_STANDARDS.md` and `CONTRIBUTING.md`, as inputs to the Standards review."
+      "observableBehavior": "Identify repository-authored documentation governing how code should be written, including files such as CODING_STANDARDS.md and CONTRIBUTING.md, for use in the Standards review."
     },
     {
-      "id": "obl-10",
+      "id": "OBL-009",
       "status": "evaluable",
       "source": {
         "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
         "instruction": "- **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.\n- **Always a judgement call.** Each smell is a labelled heuristic (\"possible Feature Envy\"), never a hard violation — and, like any standard here, skip anything tooling already enforces."
       },
-      "observableBehavior": "Give documented repository standards precedence over baseline smell heuristics, suppress any heuristic that the repository explicitly endorses, and omit checks already enforced by tooling."
+      "observableBehavior": "Give documented repository standards precedence over baseline smell heuristics, suppress heuristics explicitly endorsed by the repository, label smell findings as possible heuristics rather than hard violations, and omit matters already enforced by tooling."
     },
     {
-      "id": "obl-11",
-      "status": "evaluable",
-      "source": {
-        "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
-        "instruction": "- **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.\n- **Always a judgement call.** Each smell is a labelled heuristic (\"possible Feature Envy\"), never a hard violation — and, like any standard here, skip anything tooling already enforces."
-      },
-      "observableBehavior": "Report code smells as qualified judgment calls, using labels such as `possible Feature Envy`, rather than presenting them as categorical violations."
-    },
-    {
-      "id": "obl-12",
+      "id": "OBL-010",
       "status": "evaluable",
       "source": {
         "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
         "instruction": "- **Mysterious Name** — a function, variable, or type whose name doesn't reveal what it does or holds. → rename it; if no honest name comes, the design's murky.\n- **Duplicated Code** — the same logic shape appears in more than one hunk or file in the change. → extract the shared shape, call it from both.\n- **Feature Envy** — a method that reaches into another object's data more than its own. → move the method onto the data it envies.\n- **Data Clumps** — the same few fields or params keep travelling together (a type wanting to be born). → bundle them into one type, pass that.\n- **Primitive Obsession** — a primitive or string standing in for a domain concept that deserves its own type. → give the concept its own small type.\n- **Repeated Switches** — the same `switch`/`if`-cascade on the same type recurs across the change. → replace with polymorphism, or one map both sites share.\n- **Shotgun Surgery** — one logical change forces scattered edits across many files in the diff. → gather what changes together into one module.\n- **Divergent Change** — one file or module is edited for several unrelated reasons. → split so each module changes for one reason.\n- **Speculative Generality** — abstraction, parameters, or hooks added for needs the spec doesn't have. → delete it; inline back until a real need shows.\n- **Message Chains** — long `a.b().c().d()` navigation the caller shouldn't depend on. → hide the walk behind one method on the first object.\n- **Middle Man** — a class or function that mostly just delegates onward. → cut it, call the real target direct.\n- **Refused Bequest** — a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition."
       },
-      "observableBehavior": "During the Standards review, inspect the changed code for the listed heuristic smells: Mysterious Name, Duplicated Code, Feature Envy, Data Clumps, Primitive Obsession, Repeated Switches, Shotgun Surgery, Divergent Change, Speculative Generality, Message Chains, Middle Man, and Refused Bequest; when reporting one, include the corresponding remediation described in the contract."
+      "observableBehavior": "Inspect the changed code for the listed heuristic smells—Mysterious Name, Duplicated Code, Feature Envy, Data Clumps, Primitive Obsession, Repeated Switches, Shotgun Surgery, Divergent Change, Speculative Generality, Message Chains, Middle Man, and Refused Bequest—and associate any reported candidate with the corresponding suggested remediation."
     },
     {
-      "id": "obl-13",
+      "id": "OBL-011",
       "status": "evaluable",
       "source": {
         "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
         "instruction": "If the spec is missing, skip the Spec sub-agent and note this in the final report."
       },
-      "observableBehavior": "When no specification is available, do not launch a Spec sub-agent and explicitly note the missing specification in the final report."
+      "observableBehavior": "When no specification is available, do not launch the Spec sub-agent and state that the Spec review was skipped in the final report."
     },
     {
-      "id": "obl-14",
+      "id": "OBL-012",
       "status": "evaluable",
       "source": {
         "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
         "instruction": "Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings — the two axes are deliberately separate (see _Why two axes_)."
       },
-      "observableBehavior": "Present the aggregated reports beneath separate `## Standards` and `## Spec` headings, preserving each report verbatim or with only light cleanup; do not merge or rerank findings across axes."
+      "observableBehavior": "Present the reports under separate \"## Standards\" and \"## Spec\" headings, preserving each report verbatim or with only light cleanup, without merging or reranking their findings."
     },
     {
-      "id": "obl-15",
+      "id": "OBL-013",
       "status": "evaluable",
       "source": {
         "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
         "instruction": "End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes — that's the reranking the separation exists to prevent."
       },
-      "observableBehavior": "End the report with one line giving the total finding count for each axis and, when present, the worst finding within each axis; do not select a single worst finding across both axes."
+      "observableBehavior": "End the report with one line giving the finding count for each axis and the worst finding within each axis when present, without selecting an overall worst finding across axes."
     },
     {
-      "id": "obl-16",
+      "id": "OBL-014",
       "status": "evaluable",
       "source": {
         "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
         "instruction": "- Code that follows every standard but implements the wrong thing → **Standards pass, Spec fail.**\n- Code that does exactly what the issue asked but breaks the project's conventions → **Spec pass, Standards fail.**"
       },
-      "observableBehavior": "Determine Standards and Spec outcomes independently, allowing either axis to pass while the other fails."
+      "observableBehavior": "Determine Standards and Spec outcomes independently so a change may pass Standards while failing Spec, or pass Spec while failing Standards."
     },
     {
-      "id": "obl-17",
+      "id": "OBL-015",
       "status": "evaluable",
       "source": {
         "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
         "instruction": "Reporting them separately stops one axis from masking the other."
       },
-      "observableBehavior": "Keep the Standards and Spec assessments separate throughout reporting so that neither assessment masks the other."
+      "observableBehavior": "Keep the Standards and Spec results separately reported so neither axis masks the other."
     },
     {
-      "id": "obl-18",
+      "id": "OBL-016",
       "status": "evaluable",
       "source": {
         "path": "{{REPOSITORY_ROOT}}/docs/agents/issue-tracker.md",
         "instruction": "Issues and specs for this repo live as Markdown files in `.scratch/`."
       },
-      "observableBehavior": "Use Markdown files under `.scratch/` as the repository source for issues and specifications."
+      "observableBehavior": "Search for this repository's issue and specification Markdown files in .scratch/."
     },
     {
-      "id": "obl-19",
+      "id": "OBL-017",
       "status": "evaluable",
       "source": {
         "path": "{{REPOSITORY_ROOT}}/docs/agents/issue-tracker.md",
         "instruction": "- One feature per directory: `.scratch/<feature-slug>/`\n- The spec is `.scratch/<feature-slug>/spec.md`\n- Implementation issues are stored individually under `.scratch/<feature-slug>/issues/<NN>-<slug>.md`\n- Triage state is recorded with a `Status:` line\n- Comments are appended under a `## Comments` heading"
       },
-      "observableBehavior": "When resolving repository issues or specifications, interpret `.scratch/<feature-slug>/spec.md` as the feature specification and `.scratch/<feature-slug>/issues/<NN>-<slug>.md` as individual implementation issues; read triage state from the `Status:` line and comments from the `## Comments` section."
+      "observableBehavior": "Resolve feature artifacts using .scratch/<feature-slug>/spec.md for the specification and .scratch/<feature-slug>/issues/<NN>-<slug>.md for implementation issues; interpret the Status: line as triage state and content under \"## Comments\" as comments."
     }
   ],
   "events": [
     {
-      "id": "captured-parent-thread/captured-initial-turn/item-1/started",
+      "id": "captured-parent-thread/captured-code-review-turn/item-8/started",
       "sourceId": "captured-parent-thread",
       "sourceSequence": 1,
-      "causalParentId": "captured-parent-thread/captured-initial-turn",
+      "causalParentId": "captured-parent-thread/captured-code-review-turn",
       "sourceParentId": null,
       "sourceDepth": 0,
       "method": "item/started",
@@ -236,15 +218,15 @@
       ],
       "payload": {
         "threadId": "captured-parent-thread",
-        "turnId": "captured-initial-turn",
+        "turnId": "captured-code-review-turn",
         "item": {
           "type": "userMessage",
-          "id": "item-1",
+          "id": "item-8",
           "clientId": null,
           "content": [
             {
               "type": "text",
-              "text": "$code-review Review the changes since 4ed8844.",
+              "text": "Use $code-review to review changes since 568ce0a and report Standards and Spec findings.",
               "text_elements": []
             }
           ]
@@ -252,10 +234,10 @@
       }
     },
     {
-      "id": "captured-parent-thread/captured-initial-turn/item-2/completed",
+      "id": "captured-parent-thread/captured-code-review-turn/item-9/completed",
       "sourceId": "captured-parent-thread",
       "sourceSequence": 2,
-      "causalParentId": "captured-parent-thread/captured-initial-turn",
+      "causalParentId": "captured-parent-thread/captured-code-review-turn",
       "sourceParentId": null,
       "sourceDepth": 0,
       "method": "item/completed",
@@ -266,21 +248,21 @@
       ],
       "payload": {
         "threadId": "captured-parent-thread",
-        "turnId": "captured-initial-turn",
+        "turnId": "captured-code-review-turn",
         "item": {
           "type": "agentMessage",
-          "id": "item-2",
-          "text": "I’m using the `code-review` skill because you asked for a two-axis review. I’ll first pin `4ed8844`, locate the originating local issue/spec and repo standards, then run the Standards and Spec reviews in parallel and report them separately.",
+          "id": "item-9",
+          "text": "I’m using `code-review` again, now with `568ce0a` as the fixed point. I’ll verify the new three-dot range, identify the issue/spec and standards sources for these later commits, then run fresh Standards and Spec reviewers in parallel.",
           "phase": "commentary",
           "memoryCitation": null
         }
       }
     },
     {
-      "id": "captured-parent-thread/captured-initial-turn/item-3/completed",
+      "id": "captured-parent-thread/captured-code-review-turn/item-10/completed",
       "sourceId": "captured-parent-thread",
       "sourceSequence": 3,
-      "causalParentId": "captured-parent-thread/captured-initial-turn",
+      "causalParentId": "captured-parent-thread/captured-code-review-turn",
       "sourceParentId": null,
       "sourceDepth": 0,
       "method": "item/completed",
@@ -291,75 +273,20 @@
       ],
       "payload": {
         "threadId": "captured-parent-thread",
-        "turnId": "captured-initial-turn",
+        "turnId": "captured-code-review-turn",
         "item": {
           "type": "agentMessage",
-          "id": "item-3",
-          "text": "`4ed8844` resolves, but the required three-dot comparison is empty: there are no commits after it and the working tree is clean. The skill intentionally stops before spawning reviewers when there is no diff, so no Standards or Spec review can be run against this range. I’m confirming the exact HEAD/merge-base identity before closing this out.",
+          "id": "item-10",
+          "text": "`568ce0a` resolves, and the range contains one non-empty commit, `6128dfa Isolate the selected skill run`, touching four files. Its subject and diff continue issue 09’s acceptance work, so I’m using that local issue plus the Agent Tracer product spec as the Spec source; the standards sources remain the root agent instructions, domain vocabulary, and ADRs.",
           "phase": "commentary",
           "memoryCitation": null
         }
       }
     },
     {
-      "id": "captured-parent-thread/captured-initial-turn/item-4/completed",
+      "id": "captured-parent-thread/captured-code-review-turn/item-11/completed",
       "sourceId": "captured-parent-thread",
       "sourceSequence": 4,
-      "causalParentId": "captured-parent-thread/captured-initial-turn",
-      "sourceParentId": null,
-      "sourceDepth": 0,
-      "method": "item/completed",
-      "kind": "agent",
-      "timing": null,
-      "observationSources": [
-        "history"
-      ],
-      "payload": {
-        "threadId": "captured-parent-thread",
-        "turnId": "captured-initial-turn",
-        "item": {
-          "type": "agentMessage",
-          "id": "item-4",
-          "text": "No review was run because `4ed8844` is the current `HEAD`:\n\n- `HEAD`: `4ed884428b0529ede0c490f132fe16feba592416`\n- `git diff 4ed8844...HEAD`: empty\n- Working tree: clean\n- Commits since fixed point: none\n\nPlease provide an earlier commit or make/restore the intended changes.",
-          "phase": "final_answer",
-          "memoryCitation": null
-        }
-      }
-    },
-    {
-      "id": "captured-parent-thread/captured-code-review-turn/item-5/started",
-      "sourceId": "captured-parent-thread",
-      "sourceSequence": 5,
-      "causalParentId": "captured-parent-thread/captured-code-review-turn",
-      "sourceParentId": null,
-      "sourceDepth": 0,
-      "method": "item/started",
-      "kind": "user",
-      "timing": null,
-      "observationSources": [
-        "history"
-      ],
-      "payload": {
-        "threadId": "captured-parent-thread",
-        "turnId": "captured-code-review-turn",
-        "item": {
-          "type": "userMessage",
-          "id": "item-5",
-          "clientId": null,
-          "content": [
-            {
-              "type": "text",
-              "text": "$code-review Review the changes since 4ed8844.",
-              "text_elements": []
-            }
-          ]
-        }
-      }
-    },
-    {
-      "id": "captured-parent-thread/captured-code-review-turn/item-6/completed",
-      "sourceId": "captured-parent-thread",
-      "sourceSequence": 6,
       "causalParentId": "captured-parent-thread/captured-code-review-turn",
       "sourceParentId": null,
       "sourceDepth": 0,
@@ -374,58 +301,8 @@
         "turnId": "captured-code-review-turn",
         "item": {
           "type": "agentMessage",
-          "id": "item-6",
-          "text": "I’m rerunning the `code-review` workflow from scratch in case the branch changed since the previous attempt. I’ll validate the range, locate its issue/spec and standards, then launch the two independent review agents if the diff is now non-empty.",
-          "phase": "commentary",
-          "memoryCitation": null
-        }
-      }
-    },
-    {
-      "id": "captured-parent-thread/captured-code-review-turn/item-7/completed",
-      "sourceId": "captured-parent-thread",
-      "sourceSequence": 7,
-      "causalParentId": "captured-parent-thread/captured-code-review-turn",
-      "sourceParentId": null,
-      "sourceDepth": 0,
-      "method": "item/completed",
-      "kind": "agent",
-      "timing": null,
-      "observationSources": [
-        "history"
-      ],
-      "payload": {
-        "threadId": "captured-parent-thread",
-        "turnId": "captured-code-review-turn",
-        "item": {
-          "type": "agentMessage",
-          "id": "item-7",
-          "text": "The range is now valid: one commit (`5f0e14e`) changes nine files. I’m tracing that commit to its local spec and collecting only the repo documents that actually define implementation standards before handing each axis to its own reviewer.",
-          "phase": "commentary",
-          "memoryCitation": null
-        }
-      }
-    },
-    {
-      "id": "captured-parent-thread/captured-code-review-turn/item-8/completed",
-      "sourceId": "captured-parent-thread",
-      "sourceSequence": 8,
-      "causalParentId": "captured-parent-thread/captured-code-review-turn",
-      "sourceParentId": null,
-      "sourceDepth": 0,
-      "method": "item/completed",
-      "kind": "agent",
-      "timing": null,
-      "observationSources": [
-        "history"
-      ],
-      "payload": {
-        "threadId": "captured-parent-thread",
-        "turnId": "captured-code-review-turn",
-        "item": {
-          "type": "agentMessage",
-          "id": "item-8",
-          "text": "The originating requirement is `.scratch/agent-tracer/issues/09-prove-code-review-acceptance.md`, backed by the feature spec. The repo has no conventional style guide; its enforceable project guidance comes from `AGENTS.md`, the canonical domain vocabulary, and the relevant ADRs. I’m now starting the required Standards and Spec reviewers in parallel; the skill’s parallel-agent requirement is what triggers this delegation.",
+          "id": "item-11",
+          "text": "The skill’s parallel-review step is now starting. The Standards reviewer will judge only documented conventions and the fixed smell baseline; the Spec reviewer will independently check whether this one-commit fix truly isolates one Skill Run without weakening the acceptance requirements.",
           "phase": "commentary",
           "memoryCitation": null
         }
@@ -434,7 +311,7 @@
     {
       "id": "captured-parent-thread/captured-code-review-turn/captured-standards-call/completed",
       "sourceId": "captured-parent-thread",
-      "sourceSequence": 9,
+      "sourceSequence": 5,
       "causalParentId": "captured-parent-thread/captured-code-review-turn",
       "sourceParentId": null,
       "sourceDepth": 0,
@@ -452,14 +329,14 @@
           "id": "captured-standards-call",
           "kind": "started",
           "agentThreadId": "captured-standards-thread",
-          "agentPath": "/root/standards_review"
+          "agentPath": "/root/standards_review_568"
         }
       }
     },
     {
       "id": "captured-parent-thread/captured-code-review-turn/captured-spec-call/completed",
       "sourceId": "captured-parent-thread",
-      "sourceSequence": 10,
+      "sourceSequence": 6,
       "causalParentId": "captured-parent-thread/captured-code-review-turn",
       "sourceParentId": null,
       "sourceDepth": 0,
@@ -477,14 +354,14 @@
           "id": "captured-spec-call",
           "kind": "started",
           "agentThreadId": "captured-spec-thread",
-          "agentPath": "/root/spec_review"
+          "agentPath": "/root/spec_review_568"
         }
       }
     },
     {
-      "id": "captured-parent-thread/captured-code-review-turn/item-9/completed",
+      "id": "captured-parent-thread/captured-code-review-turn/item-12/completed",
       "sourceId": "captured-parent-thread",
-      "sourceSequence": 11,
+      "sourceSequence": 7,
       "causalParentId": "captured-parent-thread/captured-code-review-turn",
       "sourceParentId": null,
       "sourceDepth": 0,
@@ -499,17 +376,17 @@
         "turnId": "captured-code-review-turn",
         "item": {
           "type": "agentMessage",
-          "id": "item-9",
-          "text": "All automated verification passes (`typecheck`, 36 tests, and build). That establishes the change is mechanically sound, but it does not settle whether the committed evidence fulfills the manual acceptance requirement—the Spec reviewer is checking that distinction while the Standards reviewer examines the design and terminology.",
+          "id": "item-12",
+          "text": "The repository checks are clean: strict typechecking, all 44 tests, and diff whitespace validation pass. I’m also checking the new turn-selection behavior across reconnects and against the committed acceptance artifact, since the added regression only exercises initial history selection.",
           "phase": "commentary",
           "memoryCitation": null
         }
       }
     },
     {
-      "id": "captured-parent-thread/captured-code-review-turn/item-10/completed",
+      "id": "captured-parent-thread/captured-code-review-turn/item-13/completed",
       "sourceId": "captured-parent-thread",
-      "sourceSequence": 12,
+      "sourceSequence": 8,
       "causalParentId": "captured-parent-thread/captured-code-review-turn",
       "sourceParentId": null,
       "sourceDepth": 0,
@@ -524,17 +401,17 @@
         "turnId": "captured-code-review-turn",
         "item": {
           "type": "agentMessage",
-          "id": "item-10",
-          "text": "Both reviewers have completed. Their conclusions are independent: Standards found one maintainability smell and no hard rule breach; Spec found two acceptance gaps, including an explicit admission in the new documentation that the required real run is not yet complete. I’m preserving those axes separately in the final report.",
+          "id": "item-13",
+          "text": "Both reviewers have identified turn-boundary problems despite the passing suite. The main issue is that choosing the last historical turn once is not enough: unmatched buffered notifications and a later reconnect can still introduce another root turn, and the committed acceptance artifact itself has not been regenerated to remove its earlier probe.",
           "phase": "commentary",
           "memoryCitation": null
         }
       }
     },
     {
-      "id": "captured-parent-thread/captured-code-review-turn/item-11/completed",
+      "id": "captured-parent-thread/captured-code-review-turn/item-14/completed",
       "sourceId": "captured-parent-thread",
-      "sourceSequence": 13,
+      "sourceSequence": 9,
       "causalParentId": "captured-parent-thread/captured-code-review-turn",
       "sourceParentId": null,
       "sourceDepth": 0,
@@ -549,84 +426,180 @@
         "turnId": "captured-code-review-turn",
         "item": {
           "type": "agentMessage",
-          "id": "item-11",
-          "text": "Found three issues. Automated checks pass: TypeScript validation, all 36 tests, and build.\n\n## Standards\n\n- **Judgement call — possible Duplicated Code:** [test/cli.test.ts:904]({{REPOSITORY_ROOT}}/test/cli.test.ts:904) repeats the three instructions in [SKILL.md:6]({{REPOSITORY_ROOT}}/test/fixtures/skills/acceptance-code-review/SKILL.md:6). The mock obligations and fixture can silently drift apart. Derive the instructions from the fixture’s Skill Contract or centralize them in one fixture helper.\n\nNo documented-standard violations found.\n\n## Spec\n\n- **High — The required real end-to-end acceptance run is unfinished.** The issue requires a real shared App Server and interactive TUI to complete a `$code-review` Skill Run while the Tracer is attached ([issue 09:11]({{REPOSITORY_ROOT}}/.scratch/agent-tracer/issues/09-prove-code-review-acceptance.md:11)). The parent spec also requires a completed manual end-to-end run ([spec.md:96]({{REPOSITORY_ROOT}}/.scratch/agent-tracer/spec.md:96)). However, the delivered evidence explicitly says the probe “does not count as final acceptance” because the empty diff stopped the reviewers from running ([code-review-acceptance.md:110]({{REPOSITORY_ROOT}}/docs/code-review-acceptance.md:110)). Completed Conformance, nested activity, and evaluation isolation therefore remain unproven.\n\n- **Medium — The captured fixture does not cover the required protocol surface.** The issue requires captured fixtures covering concurrency, subagents, failures, cancellation, reconnect recovery, and Evaluation Runs ([issue 09:9]({{REPOSITORY_ROOT}}/.scratch/agent-tracer/issues/09-prove-code-review-acceptance.md:9)). The new capture contains only a historical message, command lifecycle, token update, unknown notification, and completion ([live-code-review.json:18]({{REPOSITORY_ROOT}}/test/fixtures/codex-0.145.0/live-code-review.json:18)). The remaining behavior is represented by scripted tests—not captured protocol fixtures—as documented in the [fixture inventory]({{REPOSITORY_ROOT}}/test/fixtures/codex-0.145.0/README.md:17).\n\nSummary: Standards — 1 judgement call, worst is duplicated fixture instructions; Spec — 2 findings, worst is the incomplete real acceptance run.",
+          "id": "item-14",
+          "text": "Review range: `568ce0a...HEAD`, containing `6128dfa Isolate the selected skill run`.\n\n## Standards\n\n- **High — Hard documented-domain breach:** [src/live-trace.ts:343]({{REPOSITORY_ROOT}}/src/live-trace.ts:343) selects the last historical turn but then appends every unmatched buffered notification without validating its `turnId`. A root-thread notification from another turn can contaminate the Trace. This violates [CONTEXT.md:11]({{REPOSITORY_ROOT}}/CONTEXT.md:11), which defines a Trace around one Skill Run, and [CONTEXT.md:43]({{REPOSITORY_ROOT}}/CONTEXT.md:43), which defines a Skill Run as one complete Codex turn.\n\n- **Low — Possible Mysterious Name:** [src/live-trace.ts:486]({{REPOSITORY_ROOT}}/src/live-trace.ts:486) names a side-effecting function `classifyLiveDescendantCoverage`, although it mutates `completeSourceIds` and `gaps` and returns only whether Events existed. Rename it to convey recording/handling, or return an explicit classification.\n\nNo other Standards findings.\n\n## Spec\n\n- **High — The acceptance artifact still contains two Skill Runs.** The issue asks for “Reproducible acceptance evidence that the completed POC can observe and audit a real interactive `$code-review` Skill Run” ([issue 09:3]({{REPOSITORY_ROOT}}/.scratch/agent-tracer/issues/09-prove-code-review-acceptance.md:3)), while the product definition says the complete turn initiated by the Root Skill is one Skill Run ([spec.md:27]({{REPOSITORY_ROOT}}/.scratch/agent-tracer/spec.md:27)). The unchanged evidence contains four Events from `captured-initial-turn` ([saved trace:225]({{REPOSITORY_ROOT}}/test/fixtures/codex-0.145.0/live-code-review-saved-trace.json:225)), followed by `captured-code-review-turn` ([saved trace:330]({{REPOSITORY_ROOT}}/test/fixtures/codex-0.145.0/live-code-review-saved-trace.json:330)); Findings still cite both ([saved trace:692]({{REPOSITORY_ROOT}}/test/fixtures/codex-0.145.0/live-code-review-saved-trace.json:692)). The evidence test preserves the contaminated 15-Event count ([cli.test.ts:1272]({{REPOSITORY_ROOT}}/test/cli.test.ts:1272)), contradicting the claim that the probe remains excluded ([code-review-acceptance.md:185]({{REPOSITORY_ROOT}}/docs/code-review-acceptance.md:185)).\n\n- **High — Reconnect can switch to a later turn instead of recovering the selected Skill Run.** The spec requires reconstructing missing activity after a disconnect ([spec.md:84]({{REPOSITORY_ROOT}}/.scratch/agent-tracer/spec.md:84)). Every connection independently selects `turns.at(-1)` ([live-trace.ts:570]({{REPOSITORY_ROOT}}/src/live-trace.ts:570)); neither the recovery checkpoint nor `observeConnection` retains the original turn ID. If that turn finishes during disconnection and another begins before resume, the later turn is replayed into the existing pipeline and supplies the terminal outcome. The reconnect test supplies only one recovered turn ([cli.test.ts:1543]({{REPOSITORY_ROOT}}/test/cli.test.ts:1543)), so it does not verify isolation across recovery.\n\nNo separate scope-creep finding.\n\nValidation passed: strict TypeScript typechecking, all 44 tests, and `git diff --check`.\n\n**Summary:** Standards: 2 findings; worst is cross-turn contamination from buffered notifications. Spec: 2 findings; worst issues are the invalid acceptance artifact and failure to pin the selected turn across reconnect.",
           "phase": "final_answer",
           "memoryCitation": null
         }
       }
     },
     {
-      "id": "captured-parent-thread/event/14",
-      "sourceId": "captured-parent-thread",
-      "sourceSequence": 14,
-      "causalParentId": "captured-parent-thread/captured-code-review-turn",
-      "sourceParentId": null,
-      "sourceDepth": 0,
-      "method": "thread/tokenUsage/updated",
-      "kind": "resource",
+      "id": "captured-standards-thread/captured-standards-turn/item-12/completed",
+      "sourceId": "captured-standards-thread",
+      "sourceSequence": 1,
+      "causalParentId": "captured-standards-thread/captured-standards-turn",
+      "sourceParentId": "captured-parent-thread/captured-code-review-turn/captured-standards-call/completed",
+      "sourceDepth": 1,
+      "method": "item/completed",
+      "kind": "agent",
       "timing": null,
       "observationSources": [
-        "live"
+        "history"
       ],
       "payload": {
-        "threadId": "captured-parent-thread",
-        "turnId": "captured-code-review-turn",
-        "tokenUsage": {
-          "total": {
-            "totalTokens": 519583,
-            "inputTokens": 513854,
-            "cachedInputTokens": 469248,
-            "cacheWriteInputTokens": 0,
-            "outputTokens": 5729,
-            "reasoningOutputTokens": 1768
-          },
-          "last": {
-            "totalTokens": 49104,
-            "inputTokens": 48354,
-            "cachedInputTokens": 47872,
-            "cacheWriteInputTokens": 0,
-            "outputTokens": 750,
-            "reasoningOutputTokens": 182
-          },
-          "modelContextWindow": 258400
+        "threadId": "captured-standards-thread",
+        "turnId": "captured-standards-turn",
+        "item": {
+          "type": "agentMessage",
+          "id": "item-12",
+          "text": "I’m applying the code-review skill’s Standards axis: I’ll compare the diff against the repository’s documented conventions and the supplied smell baseline, without changing files.",
+          "phase": "commentary",
+          "memoryCitation": null
         }
       }
     },
     {
-      "id": "captured-parent-thread/event/15",
-      "sourceId": "captured-parent-thread",
-      "sourceSequence": 15,
-      "causalParentId": null,
-      "sourceParentId": null,
-      "sourceDepth": 0,
-      "method": "thread/goal/cleared",
-      "kind": "unknown",
+      "id": "captured-standards-thread/captured-standards-turn/call_bGWowNrDYAlWmJU4cFxOERFN/completed",
+      "sourceId": "captured-standards-thread",
+      "sourceSequence": 2,
+      "causalParentId": "captured-standards-thread/captured-standards-turn",
+      "sourceParentId": "captured-parent-thread/captured-code-review-turn/captured-standards-call/completed",
+      "sourceDepth": 1,
+      "method": "item/completed",
+      "kind": "collaboration",
       "timing": null,
       "observationSources": [
-        "live"
+        "history"
       ],
       "payload": {
-        "threadId": "captured-parent-thread"
+        "threadId": "captured-standards-thread",
+        "turnId": "captured-standards-turn",
+        "item": {
+          "type": "subAgentActivity",
+          "id": "call_bGWowNrDYAlWmJU4cFxOERFN",
+          "kind": "interacted",
+          "agentThreadId": "captured-parent-thread",
+          "agentPath": "/root"
+        }
+      }
+    },
+    {
+      "id": "captured-standards-thread/captured-standards-turn/item-13/completed",
+      "sourceId": "captured-standards-thread",
+      "sourceSequence": 3,
+      "causalParentId": "captured-standards-thread/captured-standards-turn",
+      "sourceParentId": "captured-parent-thread/captured-code-review-turn/captured-standards-call/completed",
+      "sourceDepth": 1,
+      "method": "item/completed",
+      "kind": "agent",
+      "timing": null,
+      "observationSources": [
+        "history"
+      ],
+      "payload": {
+        "threadId": "captured-standards-thread",
+        "turnId": "captured-standards-turn",
+        "item": {
+          "type": "agentMessage",
+          "id": "item-13",
+          "text": "- **High — hard documented-domain breach:** [src/live-trace.ts:343]({{REPOSITORY_ROOT}}/src/live-trace.ts:343) selects the last historical turn but later appends every unmatched buffered notification without validating its `turnId`. A root-thread notification from another turn can therefore contaminate the Trace, violating [CONTEXT.md:11]({{REPOSITORY_ROOT}}/CONTEXT.md:11), which defines a Trace around one Skill Run, and [CONTEXT.md:43]({{REPOSITORY_ROOT}}/CONTEXT.md:43), which defines a Skill Run as one complete Codex turn.\n\n- **Low — possible Mysterious Name:** [src/live-trace.ts:482]({{REPOSITORY_ROOT}}/src/live-trace.ts:482) calls a side-effecting function `classifyLiveDescendantCoverage`, though it mutates `completeSourceIds` and `gaps` and returns only whether events existed. Rename it to convey recording/handling, or return an explicit classification.\n\nNo other Standards findings.",
+          "phase": "final_answer",
+          "memoryCitation": null
+        }
+      }
+    },
+    {
+      "id": "captured-spec-thread/captured-spec-turn/item-12/completed",
+      "sourceId": "captured-spec-thread",
+      "sourceSequence": 1,
+      "causalParentId": "captured-spec-thread/captured-spec-turn",
+      "sourceParentId": "captured-parent-thread/captured-code-review-turn/captured-spec-call/completed",
+      "sourceDepth": 1,
+      "method": "item/completed",
+      "kind": "agent",
+      "timing": null,
+      "observationSources": [
+        "history"
+      ],
+      "payload": {
+        "threadId": "captured-spec-thread",
+        "turnId": "captured-spec-turn",
+        "item": {
+          "type": "agentMessage",
+          "id": "item-12",
+          "text": "I’m applying the code-review skill’s Spec axis to the isolated-run fix, with particular attention to initial attachment, reconnect, and what the acceptance tests actually prove.",
+          "phase": "commentary",
+          "memoryCitation": null
+        }
+      }
+    },
+    {
+      "id": "captured-spec-thread/captured-spec-turn/call_8MWzIFDe3vQ6LevqBRWqfToU/completed",
+      "sourceId": "captured-spec-thread",
+      "sourceSequence": 2,
+      "causalParentId": "captured-spec-thread/captured-spec-turn",
+      "sourceParentId": "captured-parent-thread/captured-code-review-turn/captured-spec-call/completed",
+      "sourceDepth": 1,
+      "method": "item/completed",
+      "kind": "collaboration",
+      "timing": null,
+      "observationSources": [
+        "history"
+      ],
+      "payload": {
+        "threadId": "captured-spec-thread",
+        "turnId": "captured-spec-turn",
+        "item": {
+          "type": "subAgentActivity",
+          "id": "call_8MWzIFDe3vQ6LevqBRWqfToU",
+          "kind": "interacted",
+          "agentThreadId": "captured-parent-thread",
+          "agentPath": "/root"
+        }
+      }
+    },
+    {
+      "id": "captured-spec-thread/captured-spec-turn/item-13/completed",
+      "sourceId": "captured-spec-thread",
+      "sourceSequence": 3,
+      "causalParentId": "captured-spec-thread/captured-spec-turn",
+      "sourceParentId": "captured-parent-thread/captured-code-review-turn/captured-spec-call/completed",
+      "sourceDepth": 1,
+      "method": "item/completed",
+      "kind": "agent",
+      "timing": null,
+      "observationSources": [
+        "history"
+      ],
+      "payload": {
+        "threadId": "captured-spec-thread",
+        "turnId": "captured-spec-turn",
+        "item": {
+          "type": "agentMessage",
+          "id": "item-13",
+          "text": "## Spec\n\n- **High — The acceptance artifact still contains two Skill Runs.** The issue asks for “Reproducible acceptance evidence that the completed POC can observe and audit a real interactive `$code-review` Skill Run” ([issue 09:3]({{REPOSITORY_ROOT}}/.scratch/agent-tracer/issues/09-prove-code-review-acceptance.md:3)), while the product definition says “the complete turn initiated by the Root Skill [is] one Skill Run” ([spec.md:27]({{REPOSITORY_ROOT}}/.scratch/agent-tracer/spec.md:27)). The committed evidence remains unchanged: Events 1–4 belong to `captured-initial-turn` ([live-code-review-saved-trace.json:225]({{REPOSITORY_ROOT}}/test/fixtures/codex-0.145.0/live-code-review-saved-trace.json:225)), then the actual review begins as `captured-code-review-turn` ([live-code-review-saved-trace.json:330]({{REPOSITORY_ROOT}}/test/fixtures/codex-0.145.0/live-code-review-saved-trace.json:330)); Findings still cite both turns ([live-code-review-saved-trace.json:692]({{REPOSITORY_ROOT}}/test/fixtures/codex-0.145.0/live-code-review-saved-trace.json:692)). The evidence test merely preserves the contaminated 15-Event count ([cli.test.ts:1272]({{REPOSITORY_ROOT}}/test/cli.test.ts:1272)), contradicting the documentation’s claim that the probe “remains excluded” ([code-review-acceptance.md:185]({{REPOSITORY_ROOT}}/docs/code-review-acceptance.md:185)).\n\n- **High — Reconnect can switch to a later turn instead of recovering the selected Skill Run.** The spec requires “Attempt to reconstruct missing activity after a disconnect” ([spec.md:84]({{REPOSITORY_ROOT}}/.scratch/agent-tracer/spec.md:84)) and black-box reconnect coverage ([spec.md:91]({{REPOSITORY_ROOT}}/.scratch/agent-tracer/spec.md:91)). Every connection independently selects `turns.at(-1)` ([live-trace.ts:567]({{REPOSITORY_ROOT}}/src/live-trace.ts:567)); neither the recovery checkpoint nor `observeConnection` retains the original turn ID. If that turn completes during disconnection and the user starts another before resume, the later turn is replayed into the existing pipeline and supplies the terminal outcome. The reconnect test provides only one recovered turn ([cli.test.ts:1543]({{REPOSITORY_ROOT}}/test/cli.test.ts:1543)), so it does not prove isolation across recovery.\n\nNo separate scope-creep finding.\n\n**Spec summary:** 2 findings; worst issues are invalid committed acceptance evidence and failure to pin the selected turn across reconnect.",
+          "phase": "final_answer",
+          "memoryCitation": null
+        }
       }
     }
   ],
   "findings": [
     {
       "obligation": {
-        "id": "obl-1",
+        "id": "OBL-001",
         "status": "evaluable",
         "source": {
           "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
           "instruction": "- **Standards** — does the code conform to this repo's documented coding standards?\n- **Spec** — does the code faithfully implement the originating issue / spec?"
         },
-        "observableBehavior": "Review the changed code independently on two axes: conformity with documented repository coding standards and fidelity to the originating issue or specification."
+        "observableBehavior": "Perform two distinct reviews of the change: one against documented repository coding standards and one against the originating issue or specification."
       },
       "state": "satisfied",
       "evidenceEventIds": [
-        "captured-parent-thread/captured-code-review-turn/item-11/completed"
+        "captured-parent-thread/captured-code-review-turn/item-14/completed"
       ],
-      "explanation": "The final response independently reports repository-standard findings under `## Standards` and specification-fidelity findings under `## Spec`.",
+      "explanation": "The final response contains distinct Standards and Spec reviews.",
       "assessment": {
         "observationGapAffected": false,
         "eventSourceCoverage": "fully-reported",
@@ -635,21 +608,21 @@
     },
     {
       "obligation": {
-        "id": "obl-2",
+        "id": "OBL-002",
         "status": "evaluable",
         "source": {
           "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
           "instruction": "Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings."
         },
-        "observableBehavior": "Run the Standards review and Spec review concurrently in separate sub-agents, then aggregate their reports."
+        "observableBehavior": "Run the Standards and Spec reviews concurrently in separate sub-agents, then aggregate their returned reports."
       },
       "state": "satisfied",
       "evidenceEventIds": [
         "captured-parent-thread/captured-code-review-turn/captured-standards-call/completed",
         "captured-parent-thread/captured-code-review-turn/captured-spec-call/completed",
-        "captured-parent-thread/captured-code-review-turn/item-10/completed"
+        "captured-parent-thread/captured-code-review-turn/item-14/completed"
       ],
-      "explanation": "Separate Standards and Spec sub-agents were started before either completion was reported, and their independent conclusions were subsequently aggregated.",
+      "explanation": "Separate Standards and Spec sub-agents started before either report completed, and their reports were aggregated afterward.",
       "assessment": {
         "observationGapAffected": false,
         "eventSourceCoverage": "fully-reported",
@@ -658,41 +631,42 @@
     },
     {
       "obligation": {
-        "id": "obl-3",
+        "id": "OBL-003",
         "status": "evaluable",
         "source": {
           "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
           "instruction": "The issue tracker should have been provided to you — run `/setup-matt-pocock-skills` if `docs/agents/issue-tracker.md` is missing."
         },
-        "observableBehavior": "Before issue-tracker lookup, check for `docs/agents/issue-tracker.md`; if it is missing, run `/setup-matt-pocock-skills`."
+        "observableBehavior": "Check for docs/agents/issue-tracker.md and, if it is absent, run /setup-matt-pocock-skills before continuing."
       },
-      "state": "unobservable",
+      "state": "satisfied",
       "evidenceEventIds": [
-        "captured-parent-thread/captured-code-review-turn/item-8/completed"
+        "captured-parent-thread/captured-code-review-turn/item-10/completed",
+        "captured-parent-thread/captured-code-review-turn/item-14/completed"
       ],
-      "explanation": "The trace shows successful local issue/spec lookup but not the preliminary check for `docs/agents/issue-tracker.md` or any conditional setup action; the missing pre-attachment notification activity could contain those operations.",
+      "explanation": "The run used the repository's local issue/spec workflow and identified its local issue and product specification, so the missing-tracker fallback condition did not arise.",
       "assessment": {
-        "observationGapAffected": true,
+        "observationGapAffected": false,
         "eventSourceCoverage": "fully-reported",
         "violationBasis": "none"
       }
     },
     {
       "obligation": {
-        "id": "obl-4",
+        "id": "OBL-004",
         "status": "evaluable",
         "source": {
           "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
           "instruction": "Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it."
         },
-        "observableBehavior": "Use the revision named by the user as the fixed comparison point; if the user supplied no fixed point, ask them to provide one before reviewing."
+        "observableBehavior": "Use the revision reference supplied by the user as the fixed point; if none was supplied, ask the user to provide one."
       },
       "state": "satisfied",
       "evidenceEventIds": [
-        "captured-parent-thread/captured-initial-turn/item-1/started",
-        "captured-parent-thread/captured-code-review-turn/item-7/completed"
+        "captured-parent-thread/captured-code-review-turn/item-8/started",
+        "captured-parent-thread/captured-code-review-turn/item-14/completed"
       ],
-      "explanation": "The user supplied `4ed8844`, and the reported validated range and commit were based on that fixed point.",
+      "explanation": "The user supplied 568ce0a, and the review used 568ce0a...HEAD as its fixed range.",
       "assessment": {
         "observationGapAffected": false,
         "eventSourceCoverage": "fully-reported",
@@ -701,20 +675,20 @@
     },
     {
       "obligation": {
-        "id": "obl-5",
+        "id": "OBL-005",
         "status": "evaluable",
         "source": {
           "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
           "instruction": "Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`."
         },
-        "observableBehavior": "Capture the change set using `git diff <fixed-point>...HEAD` and record the commits using `git log <fixed-point>..HEAD --oneline`."
+        "observableBehavior": "Capture the comparison using git diff <fixed-point>...HEAD and record the commits using git log <fixed-point>..HEAD --oneline."
       },
       "state": "satisfied",
       "evidenceEventIds": [
-        "captured-parent-thread/captured-initial-turn/item-4/completed",
-        "captured-parent-thread/captured-code-review-turn/item-7/completed"
+        "captured-parent-thread/captured-code-review-turn/item-10/completed",
+        "captured-parent-thread/captured-code-review-turn/item-14/completed"
       ],
-      "explanation": "The trace reports the three-dot diff for `4ed8844...HEAD` and records the relevant commit list, initially empty and later containing `5f0e14e`.",
+      "explanation": "The trace records the three-dot comparison range and the sole commit in the corresponding commit range.",
       "assessment": {
         "observationGapAffected": false,
         "eventSourceCoverage": "fully-reported",
@@ -723,236 +697,20 @@
     },
     {
       "obligation": {
-        "id": "obl-6",
+        "id": "OBL-006",
         "status": "evaluable",
         "source": {
           "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
           "instruction": "Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here — not inside two parallel sub-agents."
         },
-        "observableBehavior": "Before launching review sub-agents, run `git rev-parse <fixed-point>` and verify that the three-dot diff is non-empty; stop at this stage if the ref is invalid or the diff is empty."
-      },
-      "state": "satisfied",
-      "evidenceEventIds": [
-        "captured-parent-thread/captured-initial-turn/item-3/completed",
-        "captured-parent-thread/captured-code-review-turn/item-7/completed",
-        "captured-parent-thread/captured-code-review-turn/captured-standards-call/completed"
-      ],
-      "explanation": "The first attempt confirmed the ref and stopped when the diff was empty. The later attempt reported a valid non-empty range before starting either reviewer.",
-      "assessment": {
-        "observationGapAffected": false,
-        "eventSourceCoverage": "fully-reported",
-        "violationBasis": "none"
-      }
-    },
-    {
-      "obligation": {
-        "id": "obl-7",
-        "status": "evaluable",
-        "source": {
-          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
-          "instruction": "1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.) — fetch via the workflow in `docs/agents/issue-tracker.md`.\n2. A path the user passed as an argument.\n3. A spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.\n4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report \"no spec available\"."
-        },
-        "observableBehavior": "Locate the review specification in this order: resolve issue references found in commit messages using `docs/agents/issue-tracker.md`; inspect any user-supplied path; search `docs/`, `specs/`, and `.scratch/` for a file matching the branch or feature; then ask the user where the spec is if none is found."
-      },
-      "state": "satisfied",
-      "evidenceEventIds": [
-        "captured-parent-thread/captured-code-review-turn/item-7/completed",
-        "captured-parent-thread/captured-code-review-turn/item-8/completed"
-      ],
-      "explanation": "The agent traced the commit to the originating `.scratch/agent-tracer/issues/09-prove-code-review-acceptance.md` issue and its backing feature specification, satisfying the first successful lookup route without needing later fallbacks.",
-      "assessment": {
-        "observationGapAffected": false,
-        "eventSourceCoverage": "fully-reported",
-        "violationBasis": "none"
-      }
-    },
-    {
-      "obligation": {
-        "id": "obl-8",
-        "status": "evaluable",
-        "source": {
-          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
-          "instruction": "1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.) — fetch via the workflow in `docs/agents/issue-tracker.md`.\n2. A path the user passed as an argument.\n3. A spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.\n4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report \"no spec available\"."
-        },
-        "observableBehavior": "If the user confirms that no specification exists, omit the Spec sub-agent and have the Spec report state `no spec available`."
-      },
-      "state": "not applicable",
-      "evidenceEventIds": [
-        "captured-parent-thread/captured-code-review-turn/item-8/completed"
-      ],
-      "explanation": "A specification was found, so the condition requiring omission of the Spec sub-agent did not arise.",
-      "assessment": {
-        "observationGapAffected": false,
-        "eventSourceCoverage": "fully-reported",
-        "violationBasis": "none"
-      }
-    },
-    {
-      "obligation": {
-        "id": "obl-9",
-        "status": "evaluable",
-        "source": {
-          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
-          "instruction": "Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`."
-        },
-        "observableBehavior": "Discover and use repository documents that prescribe how code should be written, including files such as `CODING_STANDARDS.md` and `CONTRIBUTING.md`, as inputs to the Standards review."
-      },
-      "state": "satisfied",
-      "evidenceEventIds": [
-        "captured-parent-thread/captured-code-review-turn/item-8/completed",
-        "captured-parent-thread/captured-code-review-turn/item-11/completed"
-      ],
-      "explanation": "The agent identified `AGENTS.md`, canonical domain vocabulary, and relevant ADRs as repository guidance, and the Standards report assessed documented-standard violations.",
-      "assessment": {
-        "observationGapAffected": false,
-        "eventSourceCoverage": "fully-reported",
-        "violationBasis": "none"
-      }
-    },
-    {
-      "obligation": {
-        "id": "obl-10",
-        "status": "evaluable",
-        "source": {
-          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
-          "instruction": "- **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.\n- **Always a judgement call.** Each smell is a labelled heuristic (\"possible Feature Envy\"), never a hard violation — and, like any standard here, skip anything tooling already enforces."
-        },
-        "observableBehavior": "Give documented repository standards precedence over baseline smell heuristics, suppress any heuristic that the repository explicitly endorses, and omit checks already enforced by tooling."
-      },
-      "state": "satisfied",
-      "evidenceEventIds": [
-        "captured-parent-thread/captured-code-review-turn/item-9/completed",
-        "captured-parent-thread/captured-code-review-turn/item-11/completed"
-      ],
-      "explanation": "Tool-enforced checks were reported separately as automated verification, while the Standards section distinguished its heuristic finding from documented-standard violations.",
-      "assessment": {
-        "observationGapAffected": false,
-        "eventSourceCoverage": "fully-reported",
-        "violationBasis": "none"
-      }
-    },
-    {
-      "obligation": {
-        "id": "obl-11",
-        "status": "evaluable",
-        "source": {
-          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
-          "instruction": "- **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.\n- **Always a judgement call.** Each smell is a labelled heuristic (\"possible Feature Envy\"), never a hard violation — and, like any standard here, skip anything tooling already enforces."
-        },
-        "observableBehavior": "Report code smells as qualified judgment calls, using labels such as `possible Feature Envy`, rather than presenting them as categorical violations."
-      },
-      "state": "satisfied",
-      "evidenceEventIds": [
-        "captured-parent-thread/captured-code-review-turn/item-11/completed"
-      ],
-      "explanation": "The smell was explicitly qualified as `Judgement call — possible Duplicated Code`, rather than presented as a categorical violation.",
-      "assessment": {
-        "observationGapAffected": false,
-        "eventSourceCoverage": "fully-reported",
-        "violationBasis": "none"
-      }
-    },
-    {
-      "obligation": {
-        "id": "obl-12",
-        "status": "evaluable",
-        "source": {
-          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
-          "instruction": "- **Mysterious Name** — a function, variable, or type whose name doesn't reveal what it does or holds. → rename it; if no honest name comes, the design's murky.\n- **Duplicated Code** — the same logic shape appears in more than one hunk or file in the change. → extract the shared shape, call it from both.\n- **Feature Envy** — a method that reaches into another object's data more than its own. → move the method onto the data it envies.\n- **Data Clumps** — the same few fields or params keep travelling together (a type wanting to be born). → bundle them into one type, pass that.\n- **Primitive Obsession** — a primitive or string standing in for a domain concept that deserves its own type. → give the concept its own small type.\n- **Repeated Switches** — the same `switch`/`if`-cascade on the same type recurs across the change. → replace with polymorphism, or one map both sites share.\n- **Shotgun Surgery** — one logical change forces scattered edits across many files in the diff. → gather what changes together into one module.\n- **Divergent Change** — one file or module is edited for several unrelated reasons. → split so each module changes for one reason.\n- **Speculative Generality** — abstraction, parameters, or hooks added for needs the spec doesn't have. → delete it; inline back until a real need shows.\n- **Message Chains** — long `a.b().c().d()` navigation the caller shouldn't depend on. → hide the walk behind one method on the first object.\n- **Middle Man** — a class or function that mostly just delegates onward. → cut it, call the real target direct.\n- **Refused Bequest** — a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition."
-        },
-        "observableBehavior": "During the Standards review, inspect the changed code for the listed heuristic smells: Mysterious Name, Duplicated Code, Feature Envy, Data Clumps, Primitive Obsession, Repeated Switches, Shotgun Surgery, Divergent Change, Speculative Generality, Message Chains, Middle Man, and Refused Bequest; when reporting one, include the corresponding remediation described in the contract."
-      },
-      "state": "unobservable",
-      "evidenceEventIds": [
-        "captured-parent-thread/captured-code-review-turn/captured-standards-call/completed",
-        "captured-parent-thread/captured-code-review-turn/item-11/completed"
-      ],
-      "explanation": "The final report demonstrates detection and remediation of Duplicated Code, but it does not expose whether the Standards reviewer inspected for every listed smell. The missing pre-attachment sub-agent activity could contain that inspection or its prompt.",
-      "assessment": {
-        "observationGapAffected": true,
-        "eventSourceCoverage": "fully-reported",
-        "violationBasis": "none"
-      }
-    },
-    {
-      "obligation": {
-        "id": "obl-13",
-        "status": "evaluable",
-        "source": {
-          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
-          "instruction": "If the spec is missing, skip the Spec sub-agent and note this in the final report."
-        },
-        "observableBehavior": "When no specification is available, do not launch a Spec sub-agent and explicitly note the missing specification in the final report."
-      },
-      "state": "not applicable",
-      "evidenceEventIds": [
-        "captured-parent-thread/captured-code-review-turn/item-8/completed"
-      ],
-      "explanation": "The originating issue and backing feature specification were available, so the missing-spec condition did not arise.",
-      "assessment": {
-        "observationGapAffected": false,
-        "eventSourceCoverage": "fully-reported",
-        "violationBasis": "none"
-      }
-    },
-    {
-      "obligation": {
-        "id": "obl-14",
-        "status": "evaluable",
-        "source": {
-          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
-          "instruction": "Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings — the two axes are deliberately separate (see _Why two axes_)."
-        },
-        "observableBehavior": "Present the aggregated reports beneath separate `## Standards` and `## Spec` headings, preserving each report verbatim or with only light cleanup; do not merge or rerank findings across axes."
-      },
-      "state": "satisfied",
-      "evidenceEventIds": [
-        "captured-parent-thread/captured-code-review-turn/item-11/completed"
-      ],
-      "explanation": "The final response uses separate `## Standards` and `## Spec` headings and keeps each axis's findings within its own section without cross-axis reranking.",
-      "assessment": {
-        "observationGapAffected": false,
-        "eventSourceCoverage": "fully-reported",
-        "violationBasis": "none"
-      }
-    },
-    {
-      "obligation": {
-        "id": "obl-15",
-        "status": "evaluable",
-        "source": {
-          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
-          "instruction": "End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes — that's the reranking the separation exists to prevent."
-        },
-        "observableBehavior": "End the report with one line giving the total finding count for each axis and, when present, the worst finding within each axis; do not select a single worst finding across both axes."
-      },
-      "state": "satisfied",
-      "evidenceEventIds": [
-        "captured-parent-thread/captured-code-review-turn/item-11/completed"
-      ],
-      "explanation": "The report ends with one summary line giving each axis's finding count and its own worst issue, without choosing one issue across both axes.",
-      "assessment": {
-        "observationGapAffected": false,
-        "eventSourceCoverage": "fully-reported",
-        "violationBasis": "none"
-      }
-    },
-    {
-      "obligation": {
-        "id": "obl-16",
-        "status": "evaluable",
-        "source": {
-          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
-          "instruction": "- Code that follows every standard but implements the wrong thing → **Standards pass, Spec fail.**\n- Code that does exactly what the issue asked but breaks the project's conventions → **Spec pass, Standards fail.**"
-        },
-        "observableBehavior": "Determine Standards and Spec outcomes independently, allowing either axis to pass while the other fails."
+        "observableBehavior": "Before launching review sub-agents, validate the fixed point with git rev-parse <fixed-point> and verify that the three-dot diff is non-empty; stop on an invalid reference or empty diff."
       },
       "state": "satisfied",
       "evidenceEventIds": [
         "captured-parent-thread/captured-code-review-turn/item-10/completed",
         "captured-parent-thread/captured-code-review-turn/item-11/completed"
       ],
-      "explanation": "The Standards assessment found no hard rule breach while the Spec assessment found two acceptance gaps, demonstrating independent axis outcomes.",
+      "explanation": "Before the parallel-review step began, the agent stated that 568ce0a resolved and that the range contained one non-empty commit touching four files.",
       "assessment": {
         "observationGapAffected": false,
         "eventSourceCoverage": "fully-reported",
@@ -961,19 +719,193 @@
     },
     {
       "obligation": {
-        "id": "obl-17",
+        "id": "OBL-007",
+        "status": "evaluable",
+        "source": {
+          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
+          "instruction": "1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.) — fetch via the workflow in `docs/agents/issue-tracker.md`.\n2. A path the user passed as an argument.\n3. A spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.\n4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report \"no spec available\"."
+        },
+        "observableBehavior": "Locate the specification by checking, in order, issue references in commit messages through the documented issue-tracker workflow, a user-supplied path, and matching files under docs/, specs/, or .scratch/. If none is found, ask the user for its location; if the user confirms none exists, arrange for the Spec review to be skipped and reported as \"no spec available\"."
+      },
+      "state": "satisfied",
+      "evidenceEventIds": [
+        "captured-parent-thread/captured-code-review-turn/item-10/completed",
+        "captured-parent-thread/captured-code-review-turn/item-14/completed"
+      ],
+      "explanation": "The run associated the commit with local issue 09 and the Agent Tracer product specification, then used both as Spec sources.",
+      "assessment": {
+        "observationGapAffected": false,
+        "eventSourceCoverage": "fully-reported",
+        "violationBasis": "none"
+      }
+    },
+    {
+      "obligation": {
+        "id": "OBL-008",
+        "status": "evaluable",
+        "source": {
+          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
+          "instruction": "Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`."
+        },
+        "observableBehavior": "Identify repository-authored documentation governing how code should be written, including files such as CODING_STANDARDS.md and CONTRIBUTING.md, for use in the Standards review."
+      },
+      "state": "satisfied",
+      "evidenceEventIds": [
+        "captured-parent-thread/captured-code-review-turn/item-10/completed",
+        "captured-parent-thread/captured-code-review-turn/item-14/completed"
+      ],
+      "explanation": "The run identified root agent instructions, domain vocabulary, and ADRs as standards sources, and the Standards report applied documented CONTEXT.md rules.",
+      "assessment": {
+        "observationGapAffected": false,
+        "eventSourceCoverage": "fully-reported",
+        "violationBasis": "none"
+      }
+    },
+    {
+      "obligation": {
+        "id": "OBL-009",
+        "status": "evaluable",
+        "source": {
+          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
+          "instruction": "- **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.\n- **Always a judgement call.** Each smell is a labelled heuristic (\"possible Feature Envy\"), never a hard violation — and, like any standard here, skip anything tooling already enforces."
+        },
+        "observableBehavior": "Give documented repository standards precedence over baseline smell heuristics, suppress heuristics explicitly endorsed by the repository, label smell findings as possible heuristics rather than hard violations, and omit matters already enforced by tooling."
+      },
+      "state": "satisfied",
+      "evidenceEventIds": [
+        "captured-standards-thread/captured-standards-turn/item-13/completed",
+        "captured-parent-thread/captured-code-review-turn/item-12/completed"
+      ],
+      "explanation": "The Standards report distinguishes a hard documented-domain breach from a low, possible heuristic smell, while passing tooling checks were not presented as review findings.",
+      "assessment": {
+        "observationGapAffected": false,
+        "eventSourceCoverage": "fully-reported",
+        "violationBasis": "none"
+      }
+    },
+    {
+      "obligation": {
+        "id": "OBL-010",
+        "status": "evaluable",
+        "source": {
+          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
+          "instruction": "- **Mysterious Name** — a function, variable, or type whose name doesn't reveal what it does or holds. → rename it; if no honest name comes, the design's murky.\n- **Duplicated Code** — the same logic shape appears in more than one hunk or file in the change. → extract the shared shape, call it from both.\n- **Feature Envy** — a method that reaches into another object's data more than its own. → move the method onto the data it envies.\n- **Data Clumps** — the same few fields or params keep travelling together (a type wanting to be born). → bundle them into one type, pass that.\n- **Primitive Obsession** — a primitive or string standing in for a domain concept that deserves its own type. → give the concept its own small type.\n- **Repeated Switches** — the same `switch`/`if`-cascade on the same type recurs across the change. → replace with polymorphism, or one map both sites share.\n- **Shotgun Surgery** — one logical change forces scattered edits across many files in the diff. → gather what changes together into one module.\n- **Divergent Change** — one file or module is edited for several unrelated reasons. → split so each module changes for one reason.\n- **Speculative Generality** — abstraction, parameters, or hooks added for needs the spec doesn't have. → delete it; inline back until a real need shows.\n- **Message Chains** — long `a.b().c().d()` navigation the caller shouldn't depend on. → hide the walk behind one method on the first object.\n- **Middle Man** — a class or function that mostly just delegates onward. → cut it, call the real target direct.\n- **Refused Bequest** — a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition."
+        },
+        "observableBehavior": "Inspect the changed code for the listed heuristic smells—Mysterious Name, Duplicated Code, Feature Envy, Data Clumps, Primitive Obsession, Repeated Switches, Shotgun Surgery, Divergent Change, Speculative Generality, Message Chains, Middle Man, and Refused Bequest—and associate any reported candidate with the corresponding suggested remediation."
+      },
+      "state": "satisfied",
+      "evidenceEventIds": [
+        "captured-parent-thread/captured-code-review-turn/item-11/completed",
+        "captured-standards-thread/captured-standards-turn/item-13/completed"
+      ],
+      "explanation": "The Standards reviewer applied the fixed smell baseline, reported a possible Mysterious Name with a rename or explicit-classification remediation, and stated that there were no other Standards findings.",
+      "assessment": {
+        "observationGapAffected": false,
+        "eventSourceCoverage": "fully-reported",
+        "violationBasis": "none"
+      }
+    },
+    {
+      "obligation": {
+        "id": "OBL-011",
+        "status": "evaluable",
+        "source": {
+          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
+          "instruction": "If the spec is missing, skip the Spec sub-agent and note this in the final report."
+        },
+        "observableBehavior": "When no specification is available, do not launch the Spec sub-agent and state that the Spec review was skipped in the final report."
+      },
+      "state": "not applicable",
+      "evidenceEventIds": [
+        "captured-parent-thread/captured-code-review-turn/item-10/completed"
+      ],
+      "explanation": "A specification was available, so the condition requiring the Spec sub-agent to be skipped did not arise.",
+      "assessment": {
+        "observationGapAffected": false,
+        "eventSourceCoverage": "fully-reported",
+        "violationBasis": "none"
+      }
+    },
+    {
+      "obligation": {
+        "id": "OBL-012",
+        "status": "evaluable",
+        "source": {
+          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
+          "instruction": "Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings — the two axes are deliberately separate (see _Why two axes_)."
+        },
+        "observableBehavior": "Present the reports under separate \"## Standards\" and \"## Spec\" headings, preserving each report verbatim or with only light cleanup, without merging or reranking their findings."
+      },
+      "state": "satisfied",
+      "evidenceEventIds": [
+        "captured-parent-thread/captured-code-review-turn/item-14/completed"
+      ],
+      "explanation": "The final response presents the two reports under separate ## Standards and ## Spec headings without merging or reranking their findings.",
+      "assessment": {
+        "observationGapAffected": false,
+        "eventSourceCoverage": "fully-reported",
+        "violationBasis": "none"
+      }
+    },
+    {
+      "obligation": {
+        "id": "OBL-013",
+        "status": "evaluable",
+        "source": {
+          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
+          "instruction": "End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes — that's the reranking the separation exists to prevent."
+        },
+        "observableBehavior": "End the report with one line giving the finding count for each axis and the worst finding within each axis when present, without selecting an overall worst finding across axes."
+      },
+      "state": "satisfied",
+      "evidenceEventIds": [
+        "captured-parent-thread/captured-code-review-turn/item-14/completed"
+      ],
+      "explanation": "The response ends with one summary line giving two findings for each axis and identifying the worst issue or tied issues within each axis, without choosing an overall winner.",
+      "assessment": {
+        "observationGapAffected": false,
+        "eventSourceCoverage": "fully-reported",
+        "violationBasis": "none"
+      }
+    },
+    {
+      "obligation": {
+        "id": "OBL-014",
+        "status": "evaluable",
+        "source": {
+          "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
+          "instruction": "- Code that follows every standard but implements the wrong thing → **Standards pass, Spec fail.**\n- Code that does exactly what the issue asked but breaks the project's conventions → **Spec pass, Standards fail.**"
+        },
+        "observableBehavior": "Determine Standards and Spec outcomes independently so a change may pass Standards while failing Spec, or pass Spec while failing Standards."
+      },
+      "state": "satisfied",
+      "evidenceEventIds": [
+        "captured-parent-thread/captured-code-review-turn/captured-standards-call/completed",
+        "captured-parent-thread/captured-code-review-turn/captured-spec-call/completed",
+        "captured-parent-thread/captured-code-review-turn/item-14/completed"
+      ],
+      "explanation": "The two axes were assigned to independent sub-agents and retained independent findings and severities in the aggregate report.",
+      "assessment": {
+        "observationGapAffected": false,
+        "eventSourceCoverage": "fully-reported",
+        "violationBasis": "none"
+      }
+    },
+    {
+      "obligation": {
+        "id": "OBL-015",
         "status": "evaluable",
         "source": {
           "path": "{{AGENT_HOME}}/skills/code-review/SKILL.md",
           "instruction": "Reporting them separately stops one axis from masking the other."
         },
-        "observableBehavior": "Keep the Standards and Spec assessments separate throughout reporting so that neither assessment masks the other."
+        "observableBehavior": "Keep the Standards and Spec results separately reported so neither axis masks the other."
       },
       "state": "satisfied",
       "evidenceEventIds": [
-        "captured-parent-thread/captured-code-review-turn/item-11/completed"
+        "captured-parent-thread/captured-code-review-turn/item-14/completed"
       ],
-      "explanation": "Standards and Spec findings remain in separate sections and retain separate summaries.",
+      "explanation": "Standards and Spec results remain separately headed and separately summarized.",
       "assessment": {
         "observationGapAffected": false,
         "eventSourceCoverage": "fully-reported",
@@ -982,20 +914,19 @@
     },
     {
       "obligation": {
-        "id": "obl-18",
+        "id": "OBL-016",
         "status": "evaluable",
         "source": {
           "path": "{{REPOSITORY_ROOT}}/docs/agents/issue-tracker.md",
           "instruction": "Issues and specs for this repo live as Markdown files in `.scratch/`."
         },
-        "observableBehavior": "Use Markdown files under `.scratch/` as the repository source for issues and specifications."
+        "observableBehavior": "Search for this repository's issue and specification Markdown files in .scratch/."
       },
       "state": "satisfied",
       "evidenceEventIds": [
-        "captured-parent-thread/captured-code-review-turn/item-8/completed",
-        "captured-parent-thread/captured-code-review-turn/item-11/completed"
+        "captured-parent-thread/captured-code-review-turn/item-14/completed"
       ],
-      "explanation": "The review used Markdown issue and specification files under `.scratch/agent-tracer/` as its requirements sources.",
+      "explanation": "The final review cites both the repository specification and implementation issue from the .scratch/agent-tracer hierarchy.",
       "assessment": {
         "observationGapAffected": false,
         "eventSourceCoverage": "fully-reported",
@@ -1004,22 +935,21 @@
     },
     {
       "obligation": {
-        "id": "obl-19",
+        "id": "OBL-017",
         "status": "evaluable",
         "source": {
           "path": "{{REPOSITORY_ROOT}}/docs/agents/issue-tracker.md",
           "instruction": "- One feature per directory: `.scratch/<feature-slug>/`\n- The spec is `.scratch/<feature-slug>/spec.md`\n- Implementation issues are stored individually under `.scratch/<feature-slug>/issues/<NN>-<slug>.md`\n- Triage state is recorded with a `Status:` line\n- Comments are appended under a `## Comments` heading"
         },
-        "observableBehavior": "When resolving repository issues or specifications, interpret `.scratch/<feature-slug>/spec.md` as the feature specification and `.scratch/<feature-slug>/issues/<NN>-<slug>.md` as individual implementation issues; read triage state from the `Status:` line and comments from the `## Comments` section."
+        "observableBehavior": "Resolve feature artifacts using .scratch/<feature-slug>/spec.md for the specification and .scratch/<feature-slug>/issues/<NN>-<slug>.md for implementation issues; interpret the Status: line as triage state and content under \"## Comments\" as comments."
       },
-      "state": "unobservable",
+      "state": "satisfied",
       "evidenceEventIds": [
-        "captured-parent-thread/captured-code-review-turn/item-8/completed",
-        "captured-parent-thread/captured-code-review-turn/item-11/completed"
+        "captured-parent-thread/captured-code-review-turn/item-14/completed"
       ],
-      "explanation": "The events demonstrate correct use of the feature issue and specification paths, but do not reveal whether the issue's `Status:` line and `## Comments` section were read. The missing pre-attachment activity could contain those reads.",
+      "explanation": "The run resolved the feature specification as .scratch/agent-tracer/spec.md and the implementation issue as .scratch/agent-tracer/issues/09-prove-code-review-acceptance.md; no Status or Comments interpretation was needed for the reported review.",
       "assessment": {
-        "observationGapAffected": true,
+        "observationGapAffected": false,
         "eventSourceCoverage": "fully-reported",
         "violationBasis": "none"
       }

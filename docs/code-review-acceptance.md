@@ -113,7 +113,11 @@ does not append older resumed history after them. A child whose start is
 observed live after attachment is complete without history replay; other child
 gaps are scoped only to the affected source. Root notifications stop being
 accepted as soon as the observed turn terminates, before descendant replay, so
-a later root turn cannot contaminate the finished Skill Run.
+a later root turn cannot contaminate the finished Skill Run. The selected root
+turn id remains pinned across reconnects, buffered or live root notifications
+from another turn are ignored, and descendant replay selects only the latest
+work turn from each causally reported reviewer thread rather than inherited
+earlier turns.
 
 ## Codex 0.145.0 limitations
 
@@ -157,25 +161,23 @@ ignores dangling supporting-file examples, uses deterministic instruction-block
 ids for exact source linkage, and uses the supported schema subset. These
 changes have regression coverage.
 
-The successful post-run audit exported
-`/tmp/agent-tracer-code-review-final.json`. A sanitized copy is committed as
+The acceptance evidence was regenerated from a later real shared-App-Server
+`$code-review` turn after turn-boundary fixes. The Tracer selected only that
+parent turn and the latest work turn from each of its two causally spawned
+reviewers. A sanitized copy is committed as
 `test/fixtures/codex-0.145.0/live-code-review-saved-trace.json` (SHA-256
-`f060a2bb0bd767f7a272823d8e6d29626544a7e59214f0dd54d29a6931763945`) so
-the completed run is independently inspectable. Its terminal outcome is
-completed; Root Skill Attribution is developer-confirmed; and its integrity is
-incomplete because the mid-turn resume returned notification-only history. The
-Saved Trace contains 15 replayable Events with the user, agent, collaboration,
-resource, and Unknown kinds. It contains 19 evaluable Obligations and 19
-Findings: 14 satisfied, 3 unobservable due to the recorded history gap, 2 not
-applicable, and 0 violated.
+`9e55633aa6d669fd02429d532060851013e0201782dbc254dd7c277bc6c98313`). Its
+terminal outcome is completed; Root Skill Attribution is developer-confirmed;
+and its integrity is incomplete because attachment occurred after some
+notification-only activity. The Saved Trace contains 15 replayable Events:
+nine from one parent turn and three from one latest turn on each reviewer
+source. Its 17 Findings are 16 satisfied, 1 not applicable, 0 unobservable, and
+0 violated.
 
-The successful Evaluation Runs used ephemeral threads
-`019ff2df-60bf-7b41-a6f9-22d1f7c0991f` and
-`019ff2df-eb26-74e3-9833-45efc2fdc7db`. Neither identifier appears anywhere in
-the Saved Trace Events; every saved Event has the observed parent thread as its
-source. This confirms Evaluation Run isolation for the live acceptance, while
-the deterministic black-box test verifies the same boundary with recognizable
-fixture ids.
+The Saved Trace contains exactly the observed parent and two reviewer source
+ids. No internal Evaluation Run source appears in an Event, confirming
+Evaluation Run isolation for this real audit; the deterministic black-box test
+verifies the same boundary with recognizable fixture ids.
 
 The required `$code-review` found one Standards judgement call and two Spec
 gaps in the checkpoint commit. The duplicated fixture instructions now derive
