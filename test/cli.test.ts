@@ -50,6 +50,24 @@ interface FaultInjectionFixture {
   };
 }
 
+interface LiveFailureRecoveryFixture {
+  readonly provenance: {
+    readonly codexVersion: string;
+    readonly kind: string;
+  };
+  readonly failure: {
+    readonly errorNotification: Record<string, unknown>;
+    readonly turnCompletedNotification: Record<string, unknown>;
+  };
+  readonly cancelledReconnect: {
+    readonly recoveredThread: Record<string, unknown> & {
+      readonly turns: readonly Record<string, unknown>[];
+    };
+    readonly turnCompletedNotification: Record<string, unknown>;
+  };
+  readonly evaluationRun: EvaluationRunCapturedEnvelopes;
+}
+
 async function readFaultInjectionFixture(): Promise<FaultInjectionFixture> {
   return JSON.parse(
     await readFile(
@@ -63,6 +81,21 @@ async function readFaultInjectionFixture(): Promise<FaultInjectionFixture> {
       "utf8",
     ),
   ) as FaultInjectionFixture;
+}
+
+async function readLiveFailureRecoveryFixture(): Promise<LiveFailureRecoveryFixture> {
+  return JSON.parse(
+    await readFile(
+      path.join(
+        repositoryRoot,
+        "test",
+        "fixtures",
+        "codex-0.145.0",
+        "live-failure-recovery.json",
+      ),
+      "utf8",
+    ),
+  ) as LiveFailureRecoveryFixture;
 }
 
 async function runCli(
@@ -1028,7 +1061,7 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
       };
     }[];
   };
-  const faultFixture = await readFaultInjectionFixture();
+  const liveFailureRecoveryFixture = await readLiveFailureRecoveryFixture();
   const acceptanceContract = await constructSkillContract({
     name: "acceptance-code-review",
     path: skillPath,
@@ -1119,9 +1152,9 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
       } else if (
         respondToEvaluationRun(socket, request, {
           obligations,
-          threadId: faultFixture.evaluationRuns.obligationThreadId,
+          threadId: "captured-evaluation-thread",
           capturedEnvelopes:
-            faultFixture.evaluationRuns.capturedEnvelopes,
+            liveFailureRecoveryFixture.evaluationRun,
         })
       ) {
         return;
@@ -1168,7 +1201,7 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
     result.stdout,
     /^  \[agent\].*source=captured-spec-thread.*Sanitized Spec reviewer result/m,
   );
-  assert.match(result.stdout, /^\[unknown\].*thread\/goal\/cleared/m);
+  assert.doesNotMatch(result.stdout, /^\[unknown\].*thread\/goal\/cleared/m);
   assert.match(result.stdout, /"durationMs":2000/);
   assert.match(result.stdout, /Skill Run terminal outcome: completed/);
   assert.match(result.stdout, /Finding summary:/);
@@ -1201,7 +1234,10 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
   );
   assert.deepEqual(
     requestedThreadIds(requests, "thread/unsubscribe").filter((threadId) =>
-      threadId.startsWith("captured-"),
+      [
+        fixture.threadId,
+        ...fixture.childResumeResponses.map(({ result }) => result.thread.id),
+      ].includes(threadId),
     ),
     [
       fixture.threadId,
@@ -1209,7 +1245,7 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
     ],
   );
   assert.deepEqual(
-    Object.keys(faultFixture.evaluationRuns.capturedEnvelopes),
+    Object.keys(liveFailureRecoveryFixture.evaluationRun),
     [
       "threadStartResult",
       "turnStartResult",
@@ -1220,7 +1256,7 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
   assert.equal(
     saved.events.some((event) =>
       JSON.stringify(event).includes(
-        faultFixture.evaluationRuns.obligationThreadId,
+        "captured-evaluation-thread",
       ),
     ),
     false,
@@ -1376,6 +1412,14 @@ test("marks partial descendant history as an Incomplete Trace", async (t) => {
         );
         socket.send(
           JSON.stringify({
+            method: "must-not-mix-a-turnless-root-event",
+            params: {
+              threadId: "partial-parent",
+            },
+          }),
+        );
+        socket.send(
+          JSON.stringify({
             id: request.id,
             result: {
               thread: {
@@ -1395,6 +1439,8 @@ test("marks partial descendant history as an Incomplete Trace", async (t) => {
                   },
                   {
                     id: "partial-parent-turn",
+                    startedAt: 100,
+                    completedAt: 200,
                     itemsView: "full",
                     status: "completed",
                     items: [
@@ -1436,9 +1482,12 @@ test("marks partial descendant history as an Incomplete Trace", async (t) => {
             result: {
               thread: {
                 id: "partial-child",
+                createdAt: 120,
                 turns: [
                   {
                     id: "unrelated-earlier-child-turn",
+                    startedAt: 90,
+                    completedAt: 95,
                     itemsView: "full",
                     status: "completed",
                     items: [
@@ -1450,7 +1499,23 @@ test("marks partial descendant history as an Incomplete Trace", async (t) => {
                     ],
                   },
                   {
+                    id: "causal-earlier-child-turn",
+                    startedAt: 130,
+                    completedAt: 150,
+                    itemsView: "full",
+                    status: "completed",
+                    items: [
+                      {
+                        type: "agentMessage",
+                        id: "causal-earlier-child-message",
+                        text: "include-an-earlier-causal-child-turn",
+                      },
+                    ],
+                  },
+                  {
                     id: "partial-child-turn",
+                    startedAt: 160,
+                    completedAt: 180,
                     itemsView: "summary",
                     status: "completed",
                     items: [
@@ -1458,6 +1523,20 @@ test("marks partial descendant history as an Incomplete Trace", async (t) => {
                         type: "agentMessage",
                         id: "partial-child-message",
                         text: "available child summary",
+                      },
+                    ],
+                  },
+                  {
+                    id: "unrelated-later-child-turn",
+                    startedAt: 220,
+                    completedAt: 230,
+                    itemsView: "full",
+                    status: "completed",
+                    items: [
+                      {
+                        type: "agentMessage",
+                        id: "unrelated-later-child-message",
+                        text: "must-not-mix-later-child-history",
                       },
                     ],
                   },
@@ -1479,6 +1558,10 @@ test("marks partial descendant history as an Incomplete Trace", async (t) => {
   );
 
   assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(
+    result.stdout,
+    /source=partial-child.*include-an-earlier-causal-child-turn/m,
+  );
   assert.match(result.stdout, /source=partial-child.*available child summary/m);
   assert.match(
     result.stdout,
@@ -1491,14 +1574,19 @@ test("marks partial descendant history as an Incomplete Trace", async (t) => {
   );
   assert.doesNotMatch(result.stdout, /must-not-mix-an-earlier-skill-run/);
   assert.doesNotMatch(result.stdout, /must-not-mix-a-buffered-skill-run/);
+  assert.doesNotMatch(result.stdout, /must-not-mix-a-turnless-root-event/);
   assert.doesNotMatch(result.stdout, /must-not-mix-earlier-child-history/);
+  assert.doesNotMatch(result.stdout, /must-not-mix-later-child-history/);
 });
 
 test("reports failed and cancelled Skill Run outcomes without calling them Incomplete Traces", async (t) => {
-  const faultFixture = await readFaultInjectionFixture();
-  const terminalTurns = [
-    faultFixture.terminalTurns.failed,
-    faultFixture.terminalTurns.cancelled,
+  const liveFixture = await readLiveFailureRecoveryFixture();
+  const terminalNotifications = [
+    [
+      liveFixture.failure.errorNotification,
+      liveFixture.failure.turnCompletedNotification,
+    ],
+    [liveFixture.cancelledReconnect.turnCompletedNotification],
   ];
   let connectionNumber = 0;
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -1506,7 +1594,7 @@ test("reports failed and cancelled Skill Run outcomes without calling them Incom
   t.after(() => server.close());
 
   server.on("connection", (socket) => {
-    const terminalTurn = terminalTurns[connectionNumber++];
+    const notifications = terminalNotifications[connectionNumber++] ?? [];
     socket.on("message", (data) => {
       const request = JSON.parse(data.toString()) as Record<string, unknown>;
       if (request.method === "initialize") {
@@ -1536,15 +1624,9 @@ test("reports failed and cancelled Skill Run outcomes without calling them Incom
           }),
         );
         setImmediate(() => {
-          socket.send(
-            JSON.stringify({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-terminal",
-                turn: terminalTurn,
-              },
-            }),
-          );
+          for (const notification of notifications) {
+            socket.send(JSON.stringify(notification));
+          }
         });
       } else if (request.method === "thread/unsubscribe") {
         socket.send(JSON.stringify({ id: request.id, result: {} }));
@@ -1564,8 +1646,9 @@ test("reports failed and cancelled Skill Run outcomes without calling them Incom
   assert.equal(failed.exitCode, 0, failed.stderr);
   assert.match(
     failed.stdout,
-    /Skill Run terminal outcome: failed.*model stream failed.*private failure details/,
+    /Skill Run terminal outcome: failed.*captured invalid model request/,
   );
+  assert.match(failed.stdout, /^\[error\] error/m);
   assert.match(failed.stdout, /Trace integrity: complete/);
   assert.doesNotMatch(failed.stdout, /Incomplete Trace/);
 
@@ -1573,6 +1656,78 @@ test("reports failed and cancelled Skill Run outcomes without calling them Incom
   assert.match(cancelled.stdout, /Skill Run terminal outcome: cancelled/);
   assert.match(cancelled.stdout, /Trace integrity: complete/);
   assert.doesNotMatch(cancelled.stdout, /failed|Incomplete Trace/);
+});
+
+test("replays the captured 0.145.0 disconnect, resume, and cancellation envelopes", async (t) => {
+  const fixture = await readLiveFailureRecoveryFixture();
+  let connectionNumber = 0;
+  const requests: Array<Record<string, unknown>> = [];
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+
+  server.on("connection", (socket) => {
+    const connection = ++connectionNumber;
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      requests.push(request);
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["thread-terminal"], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { thread: fixture.cancelledReconnect.recoveredThread },
+          }),
+        );
+        setImmediate(() => {
+          if (connection === 1) {
+            socket.close();
+          } else {
+            socket.send(
+              JSON.stringify(
+                fixture.cancelledReconnect.turnCompletedNotification,
+              ),
+            );
+          }
+        });
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+  const result = await runCli(
+    ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+    { codexVersion: "codex-cli 0.145.0" },
+  );
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.equal(fixture.provenance.codexVersion, "0.145.0");
+  assert.equal(
+    fixture.provenance.kind,
+    "sanitized-real-shared-app-server-capture",
+  );
+  assert.match(result.stdout, /Connection interruption detected/);
+  assert.match(result.stdout, /Available item history recovery complete/);
+  assert.match(result.stdout, /Skill Run terminal outcome: cancelled/);
+  assert.deepEqual(
+    requests.filter((request) => request.method === "thread/resume").length,
+    2,
+  );
 });
 
 test("reconnects, recovers all available item history, and deduplicates activity", async (t) => {

@@ -44,6 +44,7 @@ interface ThreadResumeResponse {
   readonly thread: {
     readonly id: string;
     readonly cwd?: string;
+    readonly createdAt?: number;
     readonly turns: readonly HistoryTurn[];
   };
 }
@@ -65,6 +66,13 @@ interface HistoryTurn {
   readonly itemsView?: "notLoaded" | "summary" | "full";
   readonly status?: string;
   readonly error?: unknown;
+  readonly startedAt?: number;
+  readonly completedAt?: number;
+}
+
+interface TurnWindow {
+  readonly startedAt: number | null;
+  readonly completedAt: number | null;
 }
 
 type LifecycleMethod = "item/started" | "item/completed";
@@ -344,6 +352,7 @@ async function observeConnection(
   const bufferedNotifications: JsonObject[] = [];
   let replayingHistory = true;
   let liveTerminalOutcome: TerminalOutcome | null = null;
+  let rootTurnWindow: TurnWindow = { startedAt: null, completedAt: null };
   let resolveCompletion: (outcome: TerminalOutcome) => void = () => undefined;
   const completion = new Promise<TerminalOutcome>((resolve) => {
     resolveCompletion = resolve;
@@ -360,7 +369,9 @@ async function observeConnection(
     if (!scoped.include) return;
     pipeline.append(method, params, ["live"]);
     if (method === "turn/completed" && params.threadId === threadId) {
-      liveTerminalOutcome = terminalOutcomeFromTurn(asObject(params.turn));
+      const turn = asObject(params.turn);
+      rootTurnWindow = mergeTurnWindows(rootTurnWindow, turnWindow(turn));
+      liveTerminalOutcome = terminalOutcomeFromTurn(turn);
       if (liveTerminalOutcome !== null) resolveCompletion(liveTerminalOutcome);
     }
   };
@@ -390,6 +401,11 @@ async function observeConnection(
     );
     observedTurnId = selectedHistory.turnId;
     const selectedTurns = selectedHistory.turns;
+    rootTurnWindow = mergeTurnWindows(
+      rootTurnWindow,
+      turnWindow(selectedTurns.at(0) ?? null),
+    );
+    const historicalOutcome = terminalOutcomeFromHistory(selectedTurns);
     const selectedResponse: ThreadResumeResponse = {
       ...response,
       thread: { ...response.thread, turns: selectedTurns },
@@ -398,6 +414,12 @@ async function observeConnection(
       (notification) => {
         const params = asObject(notification.params);
         if (params === null) return true;
+        if (
+          historicalOutcome !== null &&
+          params.threadId !== threadId
+        ) {
+          return false;
+        }
         const scoped = scopeRootNotification(
           params,
           threadId,
@@ -412,7 +434,6 @@ async function observeConnection(
     for (const notification of selectedBufferedNotifications) {
       processNotification(notification);
     }
-    const historicalOutcome = terminalOutcomeFromHistory(selectedTurns);
     const terminalOutcome =
       historicalOutcome ??
       liveTerminalOutcome ??
@@ -433,6 +454,7 @@ async function observeConnection(
         client,
         threadId,
         pipeline,
+        rootTurnWindow,
       );
     }
     return {
@@ -452,6 +474,7 @@ async function replayDescendantHistories(
   client: AppServerClient,
   rootThreadId: string,
   pipeline: EventPipeline,
+  rootTurnWindow: TurnWindow,
 ): Promise<DescendantHistoryReplay> {
   const completeSourceIds = new Set([rootThreadId]);
   const subscribedSourceIds = new Set([rootThreadId]);
@@ -486,11 +509,16 @@ async function replayDescendantHistories(
         { threadId: sourceId },
       );
       subscribedSourceIds.add(sourceId);
-      const selectedTurns = selectedSkillRunHistory(
-        response.thread.turns,
-        null,
-      ).turns;
+      const scopedHistory = causallyScopedDescendantHistory(
+        response.thread,
+        rootTurnWindow,
+      );
+      const selectedTurns = scopedHistory.turns;
       let historyIsFull = true;
+      if (scopedHistory.gapReason !== null) {
+        historyIsFull = false;
+        gaps.push({ sourceId, reason: scopedHistory.gapReason });
+      }
       for (const turn of selectedTurns) {
         if (turn.itemsView !== undefined && turn.itemsView !== "full") {
           historyIsFull = false;
@@ -640,11 +668,75 @@ function scopeRootNotification(
     return { selectedTurnId, include: true };
   }
   const turnId = notificationTurnId(params);
-  if (turnId === null) return { selectedTurnId, include: true };
+  if (turnId === null) return { selectedTurnId, include: false };
   if (selectedTurnId === null) {
     return { selectedTurnId: turnId, include: true };
   }
   return { selectedTurnId, include: turnId === selectedTurnId };
+}
+
+function turnWindow(turn: JsonObject | HistoryTurn | null): TurnWindow {
+  return {
+    startedAt:
+      typeof turn?.startedAt === "number" ? turn.startedAt : null,
+    completedAt:
+      typeof turn?.completedAt === "number" ? turn.completedAt : null,
+  };
+}
+
+function mergeTurnWindows(left: TurnWindow, right: TurnWindow): TurnWindow {
+  return {
+    startedAt: left.startedAt ?? right.startedAt,
+    completedAt: left.completedAt ?? right.completedAt,
+  };
+}
+
+function causallyScopedDescendantHistory(
+  thread: ThreadResumeResponse["thread"],
+  rootTurnWindow: TurnWindow,
+): {
+  readonly turns: readonly HistoryTurn[];
+  readonly gapReason: string | null;
+} {
+  const lowerBounds = [rootTurnWindow.startedAt, thread.createdAt].filter(
+    (value): value is number => value !== null && value !== undefined,
+  );
+  const lowerBound =
+    lowerBounds.length === 0 ? null : Math.max(...lowerBounds);
+  const upperBound = rootTurnWindow.completedAt;
+  if (lowerBound === null || upperBound === null) {
+    return {
+      turns: [],
+      gapReason:
+        "causal child-turn boundary is unavailable; descendant history was not guessed",
+    };
+  }
+  if (
+    thread.turns.some(
+      (turn) =>
+        typeof turn.startedAt !== "number" ||
+        typeof turn.completedAt !== "number",
+    )
+  ) {
+    return {
+      turns: [],
+      gapReason:
+        "child-turn timestamps are unavailable; descendant history was not guessed",
+    };
+  }
+
+  const turns = thread.turns.filter(
+    (turn) =>
+      (turn.startedAt ?? Number.NEGATIVE_INFINITY) >= lowerBound &&
+      (turn.completedAt ?? Number.POSITIVE_INFINITY) <= upperBound,
+  );
+  return turns.length === 0
+    ? {
+        turns,
+        gapReason:
+          "no descendant turn falls within the selected Root Skill turn",
+      }
+    : { turns, gapReason: null };
 }
 
 function recoveryFailureGap(

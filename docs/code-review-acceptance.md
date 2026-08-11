@@ -115,9 +115,12 @@ gaps are scoped only to the affected source. Root notifications stop being
 accepted as soon as the observed turn terminates, before descendant replay, so
 a later root turn cannot contaminate the finished Skill Run. The selected root
 turn id remains pinned across reconnects, buffered or live root notifications
-from another turn are ignored, and descendant replay selects only the latest
-work turn from each causally reported reviewer thread rather than inherited
-earlier turns.
+from another turn are ignored, and turn-less root notifications are excluded
+when they cannot be attributed safely. Descendant replay uses the child thread
+creation time and selected Root Skill turn window, retaining every causal child
+turn while excluding inherited earlier work and later unrelated work. When the
+timestamps needed for that decision are absent, it reports a gap instead of
+guessing.
 
 ## Codex 0.145.0 limitations
 
@@ -145,7 +148,7 @@ The deterministic fixture inventory and capture provenance are documented in
 
 ## Recorded acceptance
 
-The final run completed on 2026-08-11 with `codex-cli 0.145.0`, fixed point
+The initial recorded run completed on 2026-08-11 with `codex-cli 0.145.0`, fixed point
 `4ed8844`, and reviewed commit `5f0e14e`. The interactive `$code-review` turn
 ran on thread `019ff2c8-14c7-7ab3-9472-d28e600ccbc5`, spawned the independent
 Standards and Spec reviewers, completed in 165,781 ms, and reported its axes
@@ -161,18 +164,20 @@ ignores dangling supporting-file examples, uses deterministic instruction-block
 ids for exact source linkage, and uses the supported schema subset. These
 changes have regression coverage.
 
-The acceptance evidence was regenerated from a later real shared-App-Server
-`$code-review` turn after turn-boundary fixes. The Tracer selected only that
-parent turn and the latest work turn from each of its two causally spawned
-reviewers. A sanitized copy is committed as
+The replacement acceptance run completed on 2026-08-11 with `codex-cli
+0.145.0`, fixed point `568ce0a`, and reviewed commit `6128dfa`. Its interactive
+`$code-review` turn was `019ff30d-0e90-7033-92ab-0873d6800113` on thread
+`019ff305-c677-7233-81cf-38d802c4ab6b`; it completed in 193,110 ms. The two
+reviewers ran on threads `019ff30d-c536-74a0-a617-eeac8f81d160` and
+`019ff30d-e586-7c62-abf8-3a950d4ab029`. A sanitized copy is committed as
 `test/fixtures/codex-0.145.0/live-code-review-saved-trace.json` (SHA-256
 `9e55633aa6d669fd02429d532060851013e0201782dbc254dd7c277bc6c98313`). Its
 terminal outcome is completed; Root Skill Attribution is developer-confirmed;
 and its integrity is incomplete because attachment occurred after some
 notification-only activity. The Saved Trace contains 15 replayable Events:
-nine from one parent turn and three from one latest turn on each reviewer
-source. Its 17 Findings are 16 satisfied, 1 not applicable, 0 unobservable, and
-0 violated.
+nine from the selected parent turn and three from the causally spawned work
+turn on each reviewer source. Its 17 Findings are 16 satisfied, 1 not
+applicable, 0 unobservable, and 0 violated.
 
 The Saved Trace contains exactly the observed parent and two reviewer source
 ids. No internal Evaluation Run source appears in an Event, confirming
@@ -181,11 +186,11 @@ verifies the same boundary with recognizable fixture ids.
 
 The required `$code-review` found one Standards judgement call and two Spec
 gaps in the checkpoint commit. The duplicated fixture instructions now derive
-from the fixture Skill Contract, failure/cancellation/reconnect/Evaluation
-envelopes now live in a file-backed fault-injection capture consumed by the
-black-box suite, and this section replaces the incomplete initial-probe note
-with the completed evidence. The initial empty-diff topology probe remains
-excluded from acceptance.
+from the fixture Skill Contract. A sacrificial real shared-App-Server capture
+now supplies sanitized failure, cancellation, disconnect/resume, and
+structured-output Evaluation envelopes; deterministic fault injection remains
+separate supplemental edge-case coverage. The initial empty-diff topology probe
+remains excluded from acceptance.
 
 A follow-up two-axis review of `5f0e14e...0a87778` found three further Spec
 gaps and two duplication judgement calls. The follow-up fixes commit the

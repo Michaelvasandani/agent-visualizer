@@ -1,0 +1,145 @@
+{
+  "provenance": {
+    "codexVersion": "0.145.0",
+    "capturedAt": "2026-08-11",
+    "kind": "sanitized-real-shared-app-server-capture",
+    "note": "Sacrificial threads outside the observed acceptance thread; identifiers, timestamps, paths, and error text are sanitized without changing protocol shape."
+  },
+  "failure": {
+    "errorNotification": {
+      "method": "error",
+      "params": {
+        "error": {
+          "message": "captured invalid model request",
+          "codexErrorInfo": "other",
+          "additionalDetails": null
+        },
+        "willRetry": false,
+        "threadId": "thread-terminal",
+        "turnId": "captured-failed-turn"
+      }
+    },
+    "turnCompletedNotification": {
+      "method": "turn/completed",
+      "params": {
+        "threadId": "thread-terminal",
+        "turn": {
+          "id": "captured-failed-turn",
+          "items": [],
+          "itemsView": "notLoaded",
+          "status": "failed",
+          "error": {
+            "message": "captured invalid model request",
+            "codexErrorInfo": "other",
+            "additionalDetails": null
+          },
+          "startedAt": 1700000000,
+          "completedAt": 1700000002,
+          "durationMs": 1854
+        }
+      }
+    }
+  },
+  "cancelledReconnect": {
+    "turnStartResult": {
+      "turn": {
+        "id": "captured-cancelled-turn",
+        "items": [],
+        "itemsView": "notLoaded",
+        "status": "inProgress",
+        "error": null,
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null
+      }
+    },
+    "recoveredThread": {
+      "id": "thread-terminal",
+      "createdAt": 1700000000,
+      "status": {
+        "type": "active",
+        "activeFlags": []
+      },
+      "cliVersion": "0.145.0",
+      "turns": [
+        {
+          "id": "captured-cancelled-turn",
+          "items": [],
+          "itemsView": "full",
+          "status": "inProgress",
+          "error": null,
+          "startedAt": 1700000000,
+          "completedAt": null,
+          "durationMs": null
+        }
+      ]
+    },
+    "interruptResult": {},
+    "turnCompletedNotification": {
+      "method": "turn/completed",
+      "params": {
+        "threadId": "thread-terminal",
+        "turn": {
+          "id": "captured-cancelled-turn",
+          "items": [],
+          "itemsView": "notLoaded",
+          "status": "interrupted",
+          "error": null,
+          "startedAt": 1700000000,
+          "completedAt": 1700000002,
+          "durationMs": 1516
+        }
+      }
+    }
+  },
+  "evaluationRun": {
+    "threadStartResult": {
+      "thread": {
+        "id": "{{EVALUATION_THREAD_ID}}"
+      }
+    },
+    "turnStartResult": {
+      "turn": {
+        "id": "{{EVALUATION_TURN_ID}}",
+        "items": [],
+        "itemsView": "notLoaded",
+        "status": "inProgress",
+        "error": null,
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null
+      }
+    },
+    "itemCompletedNotification": {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "captured-evaluation-message",
+          "text": "{{STRUCTURED_OUTPUT}}",
+          "phase": "final_answer",
+          "memoryCitation": null
+        },
+        "threadId": "{{EVALUATION_THREAD_ID}}",
+        "turnId": "{{EVALUATION_TURN_ID}}",
+        "completedAtMs": 1700000003000
+      }
+    },
+    "turnCompletedNotification": {
+      "method": "turn/completed",
+      "params": {
+        "threadId": "{{EVALUATION_THREAD_ID}}",
+        "turn": {
+          "id": "{{EVALUATION_TURN_ID}}",
+          "items": [],
+          "itemsView": "notLoaded",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1700000000,
+          "completedAt": 1700000003,
+          "durationMs": 3245
+        }
+      }
+    }
+  }
+}
