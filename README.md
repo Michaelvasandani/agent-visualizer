@@ -90,12 +90,19 @@ Contract from its `SKILL.md` and recursively linked Markdown instruction files.
 It reads those files as text without running referenced code, follows each file
 once with cycle deduplication, and retains behavioral instruction blocks
 while excluding contextual prose and final-result quality from the contract.
+Relative references resolve from the referring file first, then from the
+observed working directory when an externally installed skill names a
+repository-relative instruction file.
 
 The Live Trace and Saved Trace are deliberately unredacted. Prompts,
 credentials, paths, proprietary content, personal data, and evaluation inputs
 may appear in terminal output or an explicitly exported JSON bundle. Evaluation
 Runs send the unredacted Skill Contract and Trace to OpenAI. Without `--export`,
 the Tracer does not persist Trace data.
+
+For the reproducible real `$code-review` acceptance procedure, protocol capture
+inventory, and known Codex 0.145.0 App Server limitations, see
+[`docs/code-review-acceptance.md`](docs/code-review-acceptance.md).
 
 ## Development
 

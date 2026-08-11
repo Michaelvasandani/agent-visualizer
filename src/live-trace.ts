@@ -141,7 +141,10 @@ export async function traceLoadedThread(
     let findings: readonly Finding[] = Object.freeze([]);
     if (skillAttribution.kind !== "unresolved") {
       const { rootSkill } = skillAttribution;
-      skillContract = await constructSkillContract(rootSkill);
+      skillContract = await constructSkillContract(
+        rootSkill,
+        observation.cwd ?? undefined,
+      );
       for (const line of renderSkillContract(skillContract)) writeLine(line);
       obligations = await compileObligations(client, skillContract);
       for (const line of renderObligations(obligations)) writeLine(line);

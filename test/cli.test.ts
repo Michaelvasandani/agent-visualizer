@@ -875,6 +875,160 @@ test("traces the only loaded thread through a fake App Server", async (t) => {
   assert.deepEqual(requests[3]?.params, { threadId: "thread-one" });
 });
 
+test("replays the captured 0.145.0 code-review fixture through the black-box boundary", async (t) => {
+  const fixturePath = path.join(
+    repositoryRoot,
+    "test",
+    "fixtures",
+    "codex-0.145.0",
+    "live-code-review.json",
+  );
+  const skillPath = path.join(
+    repositoryRoot,
+    "test",
+    "fixtures",
+    "skills",
+    "acceptance-code-review",
+    "SKILL.md",
+  );
+  const fixtureText = (await readFile(fixturePath, "utf8")).replaceAll(
+    "{{REPOSITORY_ROOT}}",
+    repositoryRoot,
+  );
+  const fixture = JSON.parse(fixtureText) as {
+    readonly capture: { readonly codexVersion: string };
+    readonly threadId: string;
+    readonly history: Record<string, unknown>;
+    readonly notifications: readonly Record<string, unknown>[];
+  };
+  const obligations = [
+    "Inspect the changed files before reporting.",
+    "Run Standards and Spec reviews as parallel subagents.",
+    "Report the Standards and Spec axes separately.",
+  ].map((instruction, index) => ({
+    id: `acceptance-obligation-${index + 1}`,
+    status: "evaluable",
+    source: { path: skillPath, instruction },
+    observableBehavior: `The captured run performs acceptance behavior ${index + 1}.`,
+  }));
+  const requests: Array<Record<string, unknown>> = [];
+  const exportDirectory = await mkdtemp(
+    path.join(tmpdir(), "agent-tracer-captured-acceptance-"),
+  );
+  const savedTracePath = path.join(exportDirectory, "captured.json");
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+
+  server.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      requests.push(request);
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              userAgent: `agent-tracer/${fixture.capture.codexVersion} (Mac OS; arm64)`,
+            },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: [fixture.threadId], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { cwd: repositoryRoot, thread: fixture.history },
+          }),
+        );
+        setImmediate(() => {
+          for (const notification of fixture.notifications) {
+            socket.send(JSON.stringify(notification));
+          }
+        });
+      } else if (request.method === "skills/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              data: [
+                {
+                  cwd: repositoryRoot,
+                  errors: [],
+                  skills: [
+                    {
+                      name: "acceptance-code-review",
+                      path: skillPath,
+                      description: "fixture",
+                      scope: "repo",
+                      enabled: true,
+                    },
+                  ],
+                },
+              ],
+            },
+          }),
+        );
+      } else if (respondToEvaluationRun(socket, request, { obligations })) {
+        return;
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+  const result = await runCli(
+    [
+      "trace",
+      "--server",
+      `ws://127.0.0.1:${address.port}`,
+      "--export",
+      savedTracePath,
+    ],
+    { codexVersion: "codex-cli 0.145.0", stdin: "y\n" },
+  );
+  const saved = JSON.parse(await readFile(savedTracePath, "utf8")) as {
+    readonly events: readonly Record<string, unknown>[];
+  };
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(result.stdout, /Automatically selected the only loaded thread/);
+  assert.match(result.stdout, /Confirm inferred Root Skill.*\[y\/N\]:/);
+  assert.match(result.stdout, /Root Skill Attribution: confirmed/);
+  assert.match(result.stdout, /^\[command\].*git diff --stat/m);
+  assert.match(result.stdout, /^\[resource\].*"totalTokens":144/m);
+  assert.match(result.stdout, /^\[unknown\].*thread\/goal\/cleared/m);
+  assert.match(result.stdout, /"durationMs":2000/);
+  assert.match(result.stdout, /Skill Run terminal outcome: completed/);
+  assert.match(result.stdout, /Finding summary:/);
+  assert.match(result.stdout, /Saved Trace exported/);
+  assert.equal(
+    saved.events.some((event) =>
+      JSON.stringify(event).includes("fixture-evaluation-thread"),
+    ),
+    false,
+  );
+  assert.equal(
+    requests.some((request) => {
+      const params = request.params as { readonly threadId?: unknown } | undefined;
+      return (
+        params?.threadId === fixture.threadId &&
+        ["turn/start", "turn/steer", "turn/interrupt"].includes(
+          String(request.method),
+        )
+      );
+    }),
+    false,
+  );
+});
+
 test("reports failed and cancelled Skill Run outcomes without calling them Incomplete Traces", async (t) => {
   let connectionNumber = 0;
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });

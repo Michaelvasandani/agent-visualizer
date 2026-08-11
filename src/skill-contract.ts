@@ -39,6 +39,7 @@ const DECLARATIVE_OPENING =
 
 export async function constructSkillContract(
   rootSkill: RootSkillSelection,
+  workingDirectory?: string,
 ): Promise<SkillContract> {
   const pendingPaths = [rootSkill.path];
   const visitedPaths = new Set<string>();
@@ -68,7 +69,9 @@ export async function constructSkillContract(
     sources.push(Object.freeze({ path: sourcePath, instructions }));
 
     for (const reference of explicitFileReferences(stripFrontmatter(sourceText))) {
-      pendingPaths.push(path.resolve(path.dirname(sourcePath), reference));
+      pendingPaths.push(
+        await resolveReferencePath(reference, sourcePath, workingDirectory),
+      );
     }
   }
 
@@ -76,6 +79,31 @@ export async function constructSkillContract(
     rootSkill: Object.freeze({ ...rootSkill }),
     sources: Object.freeze(sources),
   });
+}
+
+async function resolveReferencePath(
+  reference: string,
+  sourcePath: string,
+  workingDirectory: string | undefined,
+): Promise<string> {
+  if (path.isAbsolute(reference)) return reference;
+  const sourceRelativePath = path.resolve(path.dirname(sourcePath), reference);
+  if (workingDirectory === undefined) return sourceRelativePath;
+  try {
+    await stat(sourceRelativePath);
+    return sourceRelativePath;
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error;
+  }
+  return path.resolve(workingDirectory, reference);
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR")
+  );
 }
 
 export function renderSkillContract(contract: SkillContract): readonly string[] {

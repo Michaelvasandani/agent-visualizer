@@ -1,0 +1,39 @@
+import assert from "node:assert/strict";
+import { mkdtemp, mkdir, realpath, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import test from "node:test";
+
+import { constructSkillContract } from "../src/skill-contract.js";
+
+test("resolves explicit repository references from an external Root Skill", async () => {
+  const fixtureRoot = await mkdtemp(
+    path.join(tmpdir(), "agent-tracer-contract-"),
+  );
+  const workingDirectory = path.join(fixtureRoot, "repository");
+  const skillDirectory = path.join(fixtureRoot, "external-skill");
+  const repositoryInstruction = path.join(
+    workingDirectory,
+    "docs",
+    "agents",
+    "issue-tracker.md",
+  );
+  const skillPath = path.join(skillDirectory, "SKILL.md");
+  await mkdir(path.dirname(repositoryInstruction), { recursive: true });
+  await mkdir(skillDirectory, { recursive: true });
+  await writeFile(
+    skillPath,
+    "Inspect the issue tracker at `docs/agents/issue-tracker.md`.\n",
+  );
+  await writeFile(repositoryInstruction, "Read every requested ticket.\n");
+
+  const contract = await constructSkillContract(
+    { name: "external-skill", path: skillPath },
+    workingDirectory,
+  );
+
+  assert.deepEqual(
+    contract.sources.map((source) => source.path),
+    [await realpath(skillPath), await realpath(repositoryInstruction)],
+  );
+});

@@ -1,0 +1,137 @@
+{
+  "capture": {
+    "codexVersion": "0.145.0",
+    "capturedOn": "2026-08-11",
+    "origin": "sanitized real shared App Server plus interactive TUI $code-review run",
+    "sanitization": "Identifiers, paths, command output, token counts, and timestamps were replaced; protocol method names and payload shapes were retained."
+  },
+  "threadId": "captured-parent-thread",
+  "turnId": "captured-code-review-turn",
+  "history": {
+    "id": "captured-parent-thread",
+    "cwd": "{{REPOSITORY_ROOT}}",
+    "turns": [
+      {
+        "id": "captured-code-review-turn",
+        "status": "inProgress",
+        "itemsView": "full",
+        "items": [
+          {
+            "type": "userMessage",
+            "id": "captured-user",
+            "content": [
+              {
+                "type": "text",
+                "text": "$acceptance-code-review Review the ticket fixture.",
+                "text_elements": [
+                  {
+                    "byteRange": { "start": 0, "end": 23 },
+                    "placeholder": "$acceptance-code-review"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "notifications": [
+    {
+      "method": "thread/goal/cleared",
+      "params": { "threadId": "captured-parent-thread" }
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "threadId": "captured-parent-thread",
+        "turnId": "captured-code-review-turn",
+        "startedAtMs": 100,
+        "item": {
+          "type": "commandExecution",
+          "id": "captured-command",
+          "command": "git diff --stat fixture-base...HEAD",
+          "cwd": "{{REPOSITORY_ROOT}}",
+          "processId": "fixture-process",
+          "source": "unifiedExecStartup",
+          "status": "inProgress",
+          "commandActions": [
+            {
+              "type": "unknown",
+              "command": "git diff --stat fixture-base...HEAD"
+            }
+          ],
+          "aggregatedOutput": null,
+          "exitCode": null,
+          "durationMs": null
+        }
+      }
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "threadId": "captured-parent-thread",
+        "turnId": "captured-code-review-turn",
+        "completedAtMs": 125,
+        "item": {
+          "type": "commandExecution",
+          "id": "captured-command",
+          "command": "git diff --stat fixture-base...HEAD",
+          "cwd": "{{REPOSITORY_ROOT}}",
+          "processId": "fixture-process",
+          "source": "unifiedExecStartup",
+          "status": "completed",
+          "commandActions": [
+            {
+              "type": "unknown",
+              "command": "git diff --stat fixture-base...HEAD"
+            }
+          ],
+          "aggregatedOutput": "fixture files changed\n",
+          "exitCode": 0,
+          "durationMs": 25
+        }
+      }
+    },
+    {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "captured-parent-thread",
+        "turnId": "captured-code-review-turn",
+        "tokenUsage": {
+          "total": {
+            "totalTokens": 144,
+            "inputTokens": 89,
+            "cachedInputTokens": 34,
+            "outputTokens": 55,
+            "reasoningOutputTokens": 13
+          },
+          "last": {
+            "totalTokens": 144,
+            "inputTokens": 89,
+            "cachedInputTokens": 34,
+            "outputTokens": 55,
+            "reasoningOutputTokens": 13
+          },
+          "modelContextWindow": 258400
+        }
+      }
+    },
+    {
+      "method": "turn/completed",
+      "params": {
+        "threadId": "captured-parent-thread",
+        "turn": {
+          "id": "captured-code-review-turn",
+          "items": [],
+          "itemsView": "notLoaded",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1700000000,
+          "completedAt": 1700000002,
+          "durationMs": 2000
+        }
+      }
+    }
+  ]
+}
