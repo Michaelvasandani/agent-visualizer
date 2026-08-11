@@ -371,12 +371,17 @@ async function observeConnection(
       "thread/resume",
       { threadId },
     );
-    pipeline.replay(threadId, response.thread.turns, bufferedNotifications);
+    const selectedTurns = selectedSkillRunHistory(response.thread.turns);
+    const selectedResponse: ThreadResumeResponse = {
+      ...response,
+      thread: { ...response.thread, turns: selectedTurns },
+    };
+    pipeline.replay(threadId, selectedTurns, bufferedNotifications);
     replayingHistory = false;
     for (const notification of bufferedNotifications) {
       processNotification(notification);
     }
-    const historicalOutcome = terminalOutcomeFromHistory(response.thread.turns);
+    const historicalOutcome = terminalOutcomeFromHistory(selectedTurns);
     const terminalOutcome =
       historicalOutcome ??
       liveTerminalOutcome ??
@@ -400,7 +405,7 @@ async function observeConnection(
       );
     }
     return {
-      response,
+      response: selectedResponse,
       completeSourceIds: descendantReplay.completeSourceIds,
       subscribedThreadIds: descendantReplay.subscribedSourceIds,
       descendantHistoryGaps: descendantReplay.gaps,
@@ -432,15 +437,15 @@ async function replayDescendantHistories(
       });
     }
     attemptedSourceIds.add(sourceId);
-    if (pipeline.hasEvents(sourceId)) {
-      if (pipeline.hasCompleteLiveCoverage(sourceId)) {
-        completeSourceIds.add(sourceId);
-      } else {
-        gaps.push({
-          sourceId,
-          reason: "live activity began before descendant history could be reconstructed",
-        });
-      }
+    if (
+      classifyLiveDescendantCoverage(
+        sourceId,
+        pipeline,
+        completeSourceIds,
+        gaps,
+        "live activity began before descendant history could be reconstructed",
+      )
+    ) {
       continue;
     }
     try {
@@ -459,15 +464,15 @@ async function replayDescendantHistories(
           });
         }
       }
-      if (pipeline.hasEvents(sourceId)) {
-        if (pipeline.hasCompleteLiveCoverage(sourceId)) {
-          completeSourceIds.add(sourceId);
-        } else {
-          gaps.push({
-            sourceId,
-            reason: "live activity arrived before descendant history replay completed",
-          });
-        }
+      if (
+        classifyLiveDescendantCoverage(
+          sourceId,
+          pipeline,
+          completeSourceIds,
+          gaps,
+          "live activity arrived before descendant history replay completed",
+        )
+      ) {
         continue;
       }
       pipeline.replay(sourceId, response.thread.turns, []);
@@ -476,6 +481,22 @@ async function replayDescendantHistories(
       // The root trace remains usable; gap reporting identifies this source.
     }
   }
+}
+
+function classifyLiveDescendantCoverage(
+  sourceId: string,
+  pipeline: EventPipeline,
+  completeSourceIds: Set<string>,
+  gaps: DescendantHistoryGap[],
+  incompleteReason: string,
+): boolean {
+  if (!pipeline.hasEvents(sourceId)) return false;
+  if (pipeline.hasCompleteLiveCoverage(sourceId)) {
+    completeSourceIds.add(sourceId);
+  } else {
+    gaps.push({ sourceId, reason: incompleteReason });
+  }
+  return true;
 }
 
 function findHistoryGaps(
@@ -541,6 +562,13 @@ function selectedThreadItemHistoryIsFull(
   return turns.every(
     (turn) => turn.itemsView === undefined || turn.itemsView === "full",
   );
+}
+
+function selectedSkillRunHistory(
+  turns: readonly HistoryTurn[],
+): readonly HistoryTurn[] {
+  const selectedTurn = turns.at(-1);
+  return selectedTurn === undefined ? [] : [selectedTurn];
 }
 
 function recoveryFailureGap(

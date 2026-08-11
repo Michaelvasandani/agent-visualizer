@@ -1321,6 +1321,18 @@ test("marks partial descendant history as an Incomplete Trace", async (t) => {
                 id: "partial-parent",
                 turns: [
                   {
+                    id: "unrelated-earlier-turn",
+                    itemsView: "full",
+                    status: "completed",
+                    items: [
+                      {
+                        type: "agentMessage",
+                        id: "unrelated-earlier-message",
+                        text: "must-not-mix-an-earlier-skill-run",
+                      },
+                    ],
+                  },
+                  {
                     id: "partial-parent-turn",
                     itemsView: "full",
                     status: "completed",
@@ -1404,6 +1416,7 @@ test("marks partial descendant history as an Incomplete Trace", async (t) => {
     result.stdout,
     /must-not-contaminate-the-finished-skill-run/,
   );
+  assert.doesNotMatch(result.stdout, /must-not-mix-an-earlier-skill-run/);
 });
 
 test("reports failed and cancelled Skill Run outcomes without calling them Incomplete Traces", async (t) => {

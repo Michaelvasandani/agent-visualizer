@@ -282,6 +282,7 @@ function addLocalMarkdownReference(
 ): void {
   const target = rawTarget.trim();
   if (target === "" || target.startsWith("#")) return;
+  if (target.includes("<") || target.includes(">")) return;
   if (/^[a-z][a-z\d+.-]*:/i.test(target)) return;
   const withoutFragment = target.split(/[?#]/, 1)[0];
   if (withoutFragment?.toLowerCase().endsWith(".md")) {

@@ -39,16 +39,7 @@ test("resolves explicit repository references from an external Root Skill", asyn
 });
 
 test("ignores explicitly optional dangling Markdown examples in an external Root Skill", async () => {
-  const fixtureRoot = await mkdtemp(
-    path.join(tmpdir(), "agent-tracer-contract-"),
-  );
-  const workingDirectory = path.join(fixtureRoot, "repository");
-  const skillDirectory = path.join(fixtureRoot, "external-skill");
-  const skillPath = path.join(skillDirectory, "SKILL.md");
-  await mkdir(workingDirectory, { recursive: true });
-  await mkdir(skillDirectory, { recursive: true });
-  await writeFile(
-    skillPath,
+  const { workingDirectory, skillPath } = await createContractFixture(
     "Use repository standards, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`, when present.\n",
   );
 
@@ -64,16 +55,7 @@ test("ignores explicitly optional dangling Markdown examples in an external Root
 });
 
 test("rejects a missing required Markdown reference instead of silently weakening the contract", async () => {
-  const fixtureRoot = await mkdtemp(
-    path.join(tmpdir(), "agent-tracer-contract-"),
-  );
-  const workingDirectory = path.join(fixtureRoot, "repository");
-  const skillDirectory = path.join(fixtureRoot, "external-skill");
-  const skillPath = path.join(skillDirectory, "SKILL.md");
-  await mkdir(workingDirectory, { recursive: true });
-  await mkdir(skillDirectory, { recursive: true });
-  await writeFile(
-    skillPath,
+  const { workingDirectory, skillPath } = await createContractFixture(
     "Follow the required workflow in `docs/agents/misspelled.md`.\n",
   );
 
@@ -87,16 +69,7 @@ test("rejects a missing required Markdown reference instead of silently weakenin
 });
 
 test("does not let an optional example hide a required reference in a later clause", async () => {
-  const fixtureRoot = await mkdtemp(
-    path.join(tmpdir(), "agent-tracer-contract-"),
-  );
-  const workingDirectory = path.join(fixtureRoot, "repository");
-  const skillDirectory = path.join(fixtureRoot, "external-skill");
-  const skillPath = path.join(skillDirectory, "SKILL.md");
-  await mkdir(workingDirectory, { recursive: true });
-  await mkdir(skillDirectory, { recursive: true });
-  await writeFile(
-    skillPath,
+  const { workingDirectory, skillPath } = await createContractFixture(
     "For example, run locally. You must follow `docs/agents/required.md`.\n",
   );
 
@@ -110,16 +83,7 @@ test("does not let an optional example hide a required reference in a later clau
 });
 
 test("does not classify an explicitly mandatory reference as an optional example", async () => {
-  const fixtureRoot = await mkdtemp(
-    path.join(tmpdir(), "agent-tracer-contract-"),
-  );
-  const workingDirectory = path.join(fixtureRoot, "repository");
-  const skillDirectory = path.join(fixtureRoot, "external-skill");
-  const skillPath = path.join(skillDirectory, "SKILL.md");
-  await mkdir(workingDirectory, { recursive: true });
-  await mkdir(skillDirectory, { recursive: true });
-  await writeFile(
-    skillPath,
+  const { workingDirectory, skillPath } = await createContractFixture(
     "For example, you must follow `docs/agents/required.md` exactly.\n",
   );
 
@@ -133,16 +97,7 @@ test("does not classify an explicitly mandatory reference as an optional example
 });
 
 test("keeps a required reference mandatory when a later reference is an example", async () => {
-  const fixtureRoot = await mkdtemp(
-    path.join(tmpdir(), "agent-tracer-contract-"),
-  );
-  const workingDirectory = path.join(fixtureRoot, "repository");
-  const skillDirectory = path.join(fixtureRoot, "external-skill");
-  const skillPath = path.join(skillDirectory, "SKILL.md");
-  await mkdir(workingDirectory, { recursive: true });
-  await mkdir(skillDirectory, { recursive: true });
-  await writeFile(
-    skillPath,
+  const { workingDirectory, skillPath } = await createContractFixture(
     "You must follow `docs/agents/required.md` and may consult examples such as `docs/agents/optional.md`.\n",
   );
 
@@ -154,3 +109,35 @@ test("keeps a required reference mandatory when a later reference is an example"
     /required Markdown reference.*docs\/agents\/required\.md/i,
   );
 });
+
+test("ignores template Markdown paths that do not identify a concrete file", async () => {
+  const { workingDirectory, skillPath } = await createContractFixture(
+    "The spec is `.scratch/<feature-slug>/spec.md`.\n",
+  );
+
+  const contract = await constructSkillContract(
+    { name: "template-reference", path: skillPath },
+    workingDirectory,
+  );
+
+  assert.deepEqual(
+    contract.sources.map((source) => source.path),
+    [await realpath(skillPath)],
+  );
+});
+
+async function createContractFixture(markdown: string): Promise<{
+  readonly workingDirectory: string;
+  readonly skillPath: string;
+}> {
+  const fixtureRoot = await mkdtemp(
+    path.join(tmpdir(), "agent-tracer-contract-"),
+  );
+  const workingDirectory = path.join(fixtureRoot, "repository");
+  const skillDirectory = path.join(fixtureRoot, "external-skill");
+  const skillPath = path.join(skillDirectory, "SKILL.md");
+  await mkdir(workingDirectory, { recursive: true });
+  await mkdir(skillDirectory, { recursive: true });
+  await writeFile(skillPath, markdown);
+  return { workingDirectory, skillPath };
+}
