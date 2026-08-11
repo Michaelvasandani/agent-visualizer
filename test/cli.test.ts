@@ -251,6 +251,8 @@ test("traces the only loaded thread through a fake App Server", async (t) => {
   assert.match(result.stdout, /WARNING.*UNREDACTED SENSITIVE INFORMATION/i);
   assert.match(result.stdout, /sent unredacted\s+to OpenAI/i);
   assert.match(result.stdout, /automatically selected.*thread-one/i);
+  assert.match(result.stdout, /Skill Run terminal outcome: completed/);
+  assert.match(result.stdout, /Trace integrity: complete/);
   assert.match(result.stdout, /^\[user\] item\/started .*proprietary prompt/m);
   assert.match(result.stdout, /^\[tool\] item\/completed .*secret-tool-argument.*tool result/m);
   assert.match(result.stdout, /^\[tool\] item\/completed .*private search terms/m);
@@ -272,6 +274,441 @@ test("traces the only loaded thread through a fake App Server", async (t) => {
     ],
   );
   assert.deepEqual(requests[3]?.params, { threadId: "thread-one" });
+});
+
+test("reports failed and cancelled Skill Run outcomes without calling them Incomplete Traces", async (t) => {
+  let connectionNumber = 0;
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+
+  server.on("connection", (socket) => {
+    const status = connectionNumber++ === 0 ? "failed" : "interrupted";
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["thread-terminal"], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              thread: {
+                id: "thread-terminal",
+                turns: [],
+              },
+            },
+          }),
+        );
+        setImmediate(() => {
+          socket.send(
+            JSON.stringify({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-terminal",
+                turn: {
+                  id: "turn-terminal",
+                  status,
+                  error:
+                    status === "failed"
+                      ? {
+                          message: "model stream failed",
+                          codexErrorInfo: null,
+                          additionalDetails: "private failure details",
+                        }
+                      : null,
+                  items: [],
+                },
+              },
+            }),
+          );
+        });
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+  const serverUrl = `ws://127.0.0.1:${address.port}`;
+  const failed = await runCli(["trace", "--server", serverUrl], {
+    codexVersion: "codex-cli 0.145.0",
+  });
+  const cancelled = await runCli(["trace", "--server", serverUrl], {
+    codexVersion: "codex-cli 0.145.0",
+  });
+
+  assert.equal(failed.exitCode, 0, failed.stderr);
+  assert.match(
+    failed.stdout,
+    /Skill Run terminal outcome: failed.*model stream failed.*private failure details/,
+  );
+  assert.match(failed.stdout, /Trace integrity: complete/);
+  assert.doesNotMatch(failed.stdout, /Incomplete Trace/);
+
+  assert.equal(cancelled.exitCode, 0, cancelled.stderr);
+  assert.match(cancelled.stdout, /Skill Run terminal outcome: cancelled/);
+  assert.match(cancelled.stdout, /Trace integrity: complete/);
+  assert.doesNotMatch(cancelled.stdout, /failed|Incomplete Trace/);
+});
+
+test("reconnects, recovers all available item history, and deduplicates activity", async (t) => {
+  let connectionNumber = 0;
+  const requests: Array<Record<string, unknown>> = [];
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+
+  server.on("connection", (socket) => {
+    const connection = ++connectionNumber;
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      requests.push(request);
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["thread-recovery"], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume" && connection === 1) {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { thread: { id: "thread-recovery", turns: [] } },
+          }),
+        );
+        setImmediate(() => {
+          socket.send(
+            JSON.stringify({
+              method: "item/started",
+              params: {
+                threadId: "thread-recovery",
+                turnId: "turn-recovery",
+                item: {
+                  id: "user-recovery",
+                  type: "userMessage",
+                  content: [{ type: "text", text: "recover this trace" }],
+                },
+              },
+            }),
+            () => socket.close(),
+          );
+        });
+      } else if (request.method === "thread/resume" && connection === 2) {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              thread: {
+                id: "thread-recovery",
+                turns: [
+                  {
+                    id: "turn-recovery",
+                    status: "completed",
+                    itemsView: "full",
+                    error: null,
+                    items: [
+                      {
+                        id: "user-recovery",
+                        type: "userMessage",
+                        content: [{ type: "text", text: "recover this trace" }],
+                      },
+                      {
+                        id: "command-recovered",
+                        type: "commandExecution",
+                        status: "completed",
+                        command: "npm test",
+                        cwd: "/workspace",
+                        aggregatedOutput: "recovered output",
+                        exitCode: 0,
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+  const result = await runCli(
+    ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+    { codexVersion: "codex-cli 0.145.0" },
+  );
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(result.stdout, /Connection interruption detected/);
+  assert.match(result.stdout, /Attempting history recovery/);
+  assert.match(result.stdout, /Available item history recovery complete/);
+  assert.match(result.stdout, /recovered output/);
+  assert.equal(result.stdout.match(/recover this trace/g)?.length, 1);
+  assert.match(result.stdout, /Skill Run terminal outcome: completed/);
+  assert.match(
+    result.stdout,
+    /Incomplete Trace:.*sources=thread-recovery.*notification-only activity is unavailable from resumed history/,
+  );
+  assert.deepEqual(
+    requests.map((request) => request.method),
+    [
+      "initialize",
+      "initialized",
+      "thread/loaded/list",
+      "thread/resume",
+      "initialize",
+      "initialized",
+      "thread/resume",
+      "thread/unsubscribe",
+    ],
+  );
+});
+
+test("marks a recovered terminal run incomplete when reconnect history has a known gap", async (t) => {
+  let connectionNumber = 0;
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+
+  server.on("connection", (socket) => {
+    const connection = ++connectionNumber;
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["thread-gap"], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume" && connection === 1) {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { thread: { id: "thread-gap", turns: [] } },
+          }),
+        );
+        setImmediate(() => {
+          socket.send(
+            JSON.stringify({
+              method: "item/started",
+              params: {
+                threadId: "thread-gap",
+                turnId: "turn-gap",
+                item: {
+                  id: "user-gap",
+                  type: "userMessage",
+                  content: [{ type: "text", text: "trace before gap" }],
+                },
+              },
+            }),
+            () => socket.close(),
+          );
+        });
+      } else if (request.method === "thread/resume" && connection === 2) {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              thread: {
+                id: "thread-gap",
+                turns: [
+                  {
+                    id: "turn-gap",
+                    status: "completed",
+                    itemsView: "summary",
+                    error: null,
+                    items: [],
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+  const result = await runCli(
+    ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+    { codexVersion: "codex-cli 0.145.0" },
+  );
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(result.stdout, /Skill Run terminal outcome: completed/);
+  assert.match(
+    result.stdout,
+    /Incomplete Trace:.*interval=after thread-gap\/turn-gap\/user-gap\/started through reconnect history.*sources=thread-gap.*itemsView=summary/,
+  );
+  assert.doesNotMatch(result.stdout, /Skill Run terminal outcome: failed/);
+  assert.doesNotMatch(result.stdout, /Trace integrity: complete/);
+});
+
+test("marks partial initial history as an Incomplete Trace", async (t) => {
+  let connectionNumber = 0;
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+
+  server.on("connection", (socket) => {
+    const itemsView = connectionNumber++ === 0 ? "notLoaded" : "full";
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["thread-initial-gap"], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              thread: {
+                id: "thread-initial-gap",
+                turns: [
+                  {
+                    id: "turn-initial-gap",
+                    status: "completed",
+                    itemsView,
+                    error: null,
+                    items: [],
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+  const result = await runCli(
+    ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+    { codexVersion: "codex-cli 0.145.0" },
+  );
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(result.stdout, /Skill Run terminal outcome: completed/);
+  assert.match(
+    result.stdout,
+    /Incomplete Trace:.*interval=observation start through initial history.*sources=thread-initial-gap.*itemsView=notLoaded/,
+  );
+  assert.doesNotMatch(result.stdout, /Trace integrity: complete/);
+
+  const fullItemHistory = await runCli(
+    ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+    { codexVersion: "codex-cli 0.145.0" },
+  );
+  assert.equal(fullItemHistory.exitCode, 0, fullItemHistory.stderr);
+  assert.match(
+    fullItemHistory.stdout,
+    /Incomplete Trace:.*interval=observation start through initial history.*sources=thread-initial-gap.*notification-only activity before attachment is unavailable from resumed history/,
+  );
+  assert.doesNotMatch(fullItemHistory.stdout, /Trace integrity: complete/);
+});
+
+test("reports an Incomplete Trace when history recovery fails", async (t) => {
+  let connectionNumber = 0;
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+
+  server.on("connection", (socket) => {
+    const connection = ++connectionNumber;
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["thread-recovery-fails"], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume" && connection === 1) {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { thread: { id: "thread-recovery-fails", turns: [] } },
+          }),
+        );
+        setImmediate(() => socket.close());
+      } else if (request.method === "thread/resume" && connection === 2) {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            error: { code: -32000, message: "history unavailable" },
+          }),
+        );
+      }
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+  const result = await runCli(
+    ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+    { codexVersion: "codex-cli 0.145.0" },
+  );
+
+  assert.equal(result.exitCode, 1);
+  assert.match(
+    result.stdout,
+    /Incomplete Trace:.*interval=observation start through failed history recovery.*sources=thread-recovery-fails.*history unavailable/,
+  );
+  assert.match(result.stderr, /history unavailable/);
+  assert.doesNotMatch(result.stdout, /Trace integrity: complete/);
 });
 
 test("requires an explicit selection when multiple threads are loaded", async (t) => {

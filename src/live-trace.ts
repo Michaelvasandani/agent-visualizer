@@ -40,7 +40,9 @@ interface SkillsListResponse {
 interface HistoryTurn {
   readonly id: string;
   readonly items: readonly JsonObject[];
+  readonly itemsView?: "notLoaded" | "summary" | "full";
   readonly status?: string;
+  readonly error?: unknown;
 }
 
 type LifecycleMethod = "item/started" | "item/completed";
@@ -58,8 +60,30 @@ interface ReplayCandidate {
 }
 
 interface ThreadObservation {
+  readonly client: AppServerClient;
   readonly cwd: string | null;
   readonly events: readonly NormalizedEvent[];
+  readonly gaps: readonly TraceGap[];
+  readonly terminalOutcome: TerminalOutcome;
+}
+
+type TerminalOutcome =
+  | { readonly kind: "completed" | "cancelled" }
+  | { readonly kind: "failed"; readonly error: unknown };
+
+interface TraceGap {
+  readonly afterEventId: string | null;
+  readonly historyBoundary:
+    | "initial history"
+    | "reconnect history"
+    | "failed history recovery";
+  readonly sources: readonly string[];
+  readonly reason: string;
+}
+
+interface RecoveryCheckpoint {
+  readonly afterEventId: string | null;
+  readonly sourceIds: readonly string[];
 }
 
 interface ResolvedAttribution {
@@ -83,7 +107,7 @@ export async function traceLoadedThread(
   ) => Promise<boolean> = rejectHistoricalRootSkill,
 ): Promise<void> {
   writeLine(SENSITIVE_DATA_WARNING);
-  const client = await AppServerClient.connect(serverUrl);
+  let client = await AppServerClient.connect(serverUrl);
 
   try {
     const threadIds = await listAllLoadedThreads(client);
@@ -93,10 +117,14 @@ export async function traceLoadedThread(
     );
 
     const observation = await observeResumedThread(
+      serverUrl,
       client,
       threadId,
       writeLine,
     );
+    client = observation.client;
+    renderTerminalOutcome(observation.terminalOutcome, writeLine);
+    renderTraceIntegrity(observation.gaps, writeLine);
     const attribution = await resolveRootSkillAttribution(
       client,
       observation,
@@ -169,15 +197,89 @@ async function listAllLoadedThreads(
 }
 
 async function observeResumedThread(
-  client: AppServerClient,
+  serverUrl: string,
+  initialClient: AppServerClient,
   threadId: string,
   writeLine: (line: string) => void,
 ): Promise<ThreadObservation> {
   const pipeline = new EventPipeline(threadId, writeLine);
+  const gaps: TraceGap[] = [];
+  let client = initialClient;
+  let cwd: string | null = null;
+  let recoveryCheckpoint: RecoveryCheckpoint | null = null;
+
+  while (true) {
+    let result: Awaited<ReturnType<typeof observeConnection>>;
+    try {
+      result = await observeConnection(client, threadId, pipeline);
+    } catch (error) {
+      if (recoveryCheckpoint === null) throw error;
+      const failureGap = recoveryFailureGap(recoveryCheckpoint, error);
+      renderTraceIntegrity([...gaps, failureGap], writeLine);
+      client.close();
+      throw error;
+    }
+    cwd = result.response.cwd ?? result.response.thread.cwd ?? cwd;
+    const isRecovery = recoveryCheckpoint !== null;
+    const historyCheckpoint = recoveryCheckpoint ?? {
+      afterEventId: null,
+      sourceIds: pipeline.sourceIds(),
+    };
+    const historyGaps = findHistoryGaps(
+      threadId,
+      result.response.thread.turns,
+      historyCheckpoint,
+      isRecovery ? "reconnect history" : "initial history",
+    );
+    gaps.push(...historyGaps);
+    if (
+      isRecovery &&
+      selectedThreadItemHistoryIsFull(result.response.thread.turns)
+    ) {
+      writeLine(
+        "Available item history recovery complete; resumed live observation without duplicate Events.",
+      );
+    }
+    recoveryCheckpoint = null;
+
+    if (result.terminalOutcome !== null) {
+      return Object.freeze({
+        client,
+        cwd,
+        events: pipeline.events(),
+        gaps: Object.freeze([...gaps]),
+        terminalOutcome: result.terminalOutcome,
+      });
+    }
+
+    recoveryCheckpoint = pipeline.recoveryCheckpoint();
+    writeLine(
+      `Connection interruption detected after ${recoveryCheckpoint.afterEventId ?? "observation start"}.`,
+    );
+    writeLine("Attempting history recovery before continuing live observation.");
+    try {
+      client = await AppServerClient.connect(serverUrl);
+    } catch (error) {
+      const failureGap = recoveryFailureGap(recoveryCheckpoint, error);
+      renderTraceIntegrity([...gaps, failureGap], writeLine);
+      throw error;
+    }
+  }
+}
+
+async function observeConnection(
+  client: AppServerClient,
+  threadId: string,
+  pipeline: EventPipeline,
+): Promise<{
+  readonly response: ThreadResumeResponse;
+  readonly terminalOutcome: TerminalOutcome | null;
+}> {
   const bufferedNotifications: JsonObject[] = [];
   let replayingHistory = true;
-  let resolveCompletion: () => void = () => undefined;
-  const completion = new Promise<void>((resolve) => {
+  let liveTerminalOutcome: TerminalOutcome | null = null;
+  let resolveCompletion: (outcome: TerminalOutcome) => void = () => undefined;
+  const completion = new Promise<TerminalOutcome>((resolve) => {
     resolveCompletion = resolve;
   });
 
@@ -188,7 +290,8 @@ async function observeResumedThread(
     if (typeof method !== "string") return;
     pipeline.append(method, params, ["live"]);
     if (method === "turn/completed" && params.threadId === threadId) {
-      resolveCompletion();
+      liveTerminalOutcome = terminalOutcomeFromTurn(asObject(params.turn));
+      if (liveTerminalOutcome !== null) resolveCompletion(liveTerminalOutcome);
     }
   };
 
@@ -206,18 +309,141 @@ async function observeResumedThread(
       { threadId },
     );
     pipeline.replay(response.thread.turns, bufferedNotifications);
-    if (latestTurnIsTerminal(response.thread.turns)) resolveCompletion();
     replayingHistory = false;
     for (const notification of bufferedNotifications) {
       processNotification(notification);
     }
-    await completion;
-    return Object.freeze({
-      cwd: response.cwd ?? response.thread.cwd ?? null,
-      events: pipeline.events(),
-    });
+    const historicalOutcome = terminalOutcomeFromHistory(response.thread.turns);
+    const terminalOutcome = historicalOutcome ?? liveTerminalOutcome;
+    if (terminalOutcome !== null) return { response, terminalOutcome };
+
+    return {
+      response,
+      terminalOutcome: await Promise.race([
+        completion,
+        client.whenClosed().then(() => null),
+      ]),
+    };
   } finally {
     removeHandler();
+  }
+}
+
+function findHistoryGaps(
+  threadId: string,
+  turns: readonly HistoryTurn[],
+  checkpoint: RecoveryCheckpoint,
+  historyBoundary: TraceGap["historyBoundary"],
+): readonly TraceGap[] {
+  const incompleteViews = turns.flatMap((turn) =>
+    turn.itemsView !== undefined && turn.itemsView !== "full"
+      ? [`turn ${turn.id} itemsView=${turn.itemsView}`]
+      : [],
+  );
+  const unavailableDescendants = checkpoint.sourceIds.filter(
+    (sourceId) => sourceId !== threadId,
+  );
+  if (
+    historyBoundary === "initial history" &&
+    turns.length === 0 &&
+    incompleteViews.length === 0 &&
+    unavailableDescendants.length === 0
+  ) {
+    return [];
+  }
+
+  const reasons = [...incompleteViews];
+  if (historyBoundary === "reconnect history") {
+    reasons.push(
+      "notification-only activity is unavailable from resumed history",
+    );
+  } else if (turns.length > 0) {
+    reasons.push(
+      "notification-only activity before attachment is unavailable from resumed history",
+    );
+  }
+  if (unavailableDescendants.length > 0) {
+    reasons.push("selected-thread history does not reconstruct descendant sources");
+  }
+  return [
+    Object.freeze({
+      afterEventId: checkpoint.afterEventId,
+      historyBoundary,
+      sources: Object.freeze([...checkpoint.sourceIds]),
+      reason: reasons.join("; "),
+    }),
+  ];
+}
+
+function selectedThreadItemHistoryIsFull(
+  turns: readonly HistoryTurn[],
+): boolean {
+  return turns.every(
+    (turn) => turn.itemsView === undefined || turn.itemsView === "full",
+  );
+}
+
+function recoveryFailureGap(
+  checkpoint: RecoveryCheckpoint,
+  error: unknown,
+): TraceGap {
+  const reason = error instanceof Error ? error.message : String(error);
+  return Object.freeze({
+    afterEventId: checkpoint.afterEventId,
+    historyBoundary: "failed history recovery",
+    sources: Object.freeze([...checkpoint.sourceIds]),
+    reason,
+  });
+}
+
+function terminalOutcomeFromHistory(
+  turns: readonly HistoryTurn[],
+): TerminalOutcome | null {
+  const latestTurn = turns.at(-1);
+  return latestTurn === undefined
+    ? null
+    : terminalOutcome(latestTurn.status, latestTurn.error);
+}
+
+function terminalOutcomeFromTurn(turn: JsonObject | null): TerminalOutcome | null {
+  return terminalOutcome(
+    typeof turn?.status === "string" ? turn.status : "completed",
+    turn?.error,
+  );
+}
+
+function terminalOutcome(status: string | undefined, error: unknown): TerminalOutcome | null {
+  if (status === "completed") return { kind: "completed" };
+  if (status === "interrupted") return { kind: "cancelled" };
+  if (status === "failed") return { kind: "failed", error };
+  return null;
+}
+
+function renderTerminalOutcome(
+  outcome: TerminalOutcome,
+  writeLine: (line: string) => void,
+): void {
+  const failure = outcome.kind === "failed" ? ` error=${JSON.stringify(outcome.error)}` : "";
+  writeLine(`Skill Run terminal outcome: ${outcome.kind}${failure}`);
+}
+
+function renderTraceIntegrity(
+  gaps: readonly TraceGap[],
+  writeLine: (line: string) => void,
+): void {
+  if (gaps.length === 0) {
+    writeLine("Trace integrity: complete.");
+    return;
+  }
+  for (const gap of gaps) {
+    const intervalStart =
+      gap.afterEventId === null
+        ? "observation start"
+        : `after ${gap.afterEventId}`;
+    writeLine(
+      `Incomplete Trace: interval=${intervalStart} through ${gap.historyBoundary}; ` +
+        `sources=${gap.sources.join(",")}; reason=${gap.reason}.`,
+    );
   }
 }
 
@@ -413,6 +639,17 @@ class EventPipeline {
 
   events(): readonly NormalizedEvent[] {
     return Object.freeze([...this.#events]);
+  }
+
+  recoveryCheckpoint(): RecoveryCheckpoint {
+    return Object.freeze({
+      afterEventId: this.#events.at(-1)?.id ?? null,
+      sourceIds: Object.freeze([...this.#knownSourceIds]),
+    });
+  }
+
+  sourceIds(): readonly string[] {
+    return Object.freeze([...this.#knownSourceIds]);
   }
 
   replay(
@@ -763,11 +1000,6 @@ function mergeEventPayload(
     ...laterPayload,
     item: { ...earlierItem, ...laterItem },
   };
-}
-
-function latestTurnIsTerminal(turns: readonly HistoryTurn[]): boolean {
-  const status = turns.at(-1)?.status;
-  return status === "completed" || status === "failed" || status === "interrupted";
 }
 
 function traceKind(method: string, params: JsonObject): TraceEventKind {

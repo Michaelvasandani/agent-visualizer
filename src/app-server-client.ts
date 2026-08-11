@@ -14,10 +14,17 @@ export class AppServerClient {
   readonly #socket: WebSocket;
   readonly #pendingRequests = new Map<number, PendingRequest>();
   readonly #notificationHandlers = new Set<NotificationHandler>();
+  readonly #closed: Promise<Error>;
   #nextRequestId = 1;
 
   private constructor(socket: WebSocket) {
     this.#socket = socket;
+    this.#closed = new Promise((resolve) => {
+      socket.once("close", (code, reason) => {
+        const detail = reason.length === 0 ? "" : `: ${reason.toString()}`;
+        resolve(new Error(`The App Server connection closed (${code})${detail}.`));
+      });
+    });
     socket.on("message", (data) => this.#handleMessage(data));
     socket.on("error", (error) => this.#rejectPending(error));
     socket.on("close", () =>
@@ -80,6 +87,10 @@ export class AppServerClient {
 
   close(): void {
     this.#socket.close();
+  }
+
+  whenClosed(): Promise<Error> {
+    return this.#closed;
   }
 
   #handleMessage(data: RawData): void {

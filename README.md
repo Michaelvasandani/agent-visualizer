@@ -50,6 +50,15 @@ per-thread sequence, and causal turn metadata. The Tracer does not start, steer,
 interrupt, or otherwise control the observed Skill Run, and unsubscribing does
 not affect the run.
 
+Completed, failed, and cancelled Skill Runs have separate terminal outcome
+lines; Trace integrity is reported independently. Non-empty replayed history is
+marked incomplete because notification-only activity from before attachment
+cannot be reconstructed. After a connection interruption, the Tracer reconnects
+and replays available item history through the same deduplicating pipeline, but
+retains an Incomplete Trace interval for notification-only or descendant-source
+activity that history cannot recover. Failed recovery reports the affected
+interval, sources, and error before the CLI exits.
+
 When the live user input includes Codex's structured skill name and path, the
 Tracer records exact Root Skill Attribution without prompting. If replayed
 history contains only a `$skill-name` mention, the Tracer resolves it against
