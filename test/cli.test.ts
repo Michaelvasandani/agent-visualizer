@@ -762,3 +762,372 @@ test("starts and owns a foreground shared App Server", async () => {
     /fake app server: app-server --listen ws:\/\/127\.0\.0\.1:4555/,
   );
 });
+
+test("uses exact live Root Skill metadata to construct the recursive execution-only Skill Contract", async (t) => {
+  const requests: Array<Record<string, unknown>> = [];
+  const skillPath = path.join(
+    repositoryRoot,
+    "test",
+    "fixtures",
+    "skills",
+    "trace-fixture",
+    "SKILL.md",
+  );
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+
+  server.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      requests.push(request);
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["thread-one"], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume") {
+        socket.send(
+          JSON.stringify({
+            method: "item/started",
+            params: {
+              threadId: "thread-one",
+              turnId: "turn-one",
+              startedAtMs: 100,
+              item: {
+                type: "userMessage",
+                id: "user-one",
+                content: [
+                  { type: "skill", name: "trace-fixture", path: skillPath },
+                  { type: "text", text: "Please run the selected skill." },
+                ],
+              },
+            },
+          }),
+        );
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              thread: {
+                id: "thread-one",
+                cwd: repositoryRoot,
+                turns: [
+                  {
+                    id: "turn-one",
+                    status: "inProgress",
+                    items: [
+                      {
+                        type: "userMessage",
+                        id: "user-one",
+                        content: [
+                          {
+                            type: "text",
+                            text: "Please run $trace-fixture.",
+                            text_elements: [],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          }),
+        );
+        setImmediate(() => {
+          socket.send(
+            JSON.stringify({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-one",
+                turn: { id: "turn-one", status: "completed", items: [] },
+              },
+            }),
+          );
+        });
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+  const result = await runCli(
+    ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+    { codexVersion: "codex-cli 0.145.0" },
+  );
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(result.stdout, /Root Skill Attribution: exact.*trace-fixture/);
+  assert.doesNotMatch(result.stdout, /Confirm inferred Root Skill/);
+  assert.match(result.stdout, /Implement the work described by the developer\./);
+  assert.match(result.stdout, /Inspect the requested change before editing it\./);
+  assert.match(result.stdout, /Before sending the final output, run the tests\./);
+  assert.match(result.stdout, /Run the targeted test after each behavioral change\./);
+  assert.match(result.stdout, /Run the output verification command after editing\./);
+  assert.match(result.stdout, /Run the full test suite once at the end\./);
+  assert.doesNotMatch(result.stdout, /elegant final answer/);
+  assert.doesNotMatch(result.stdout, /polished report/);
+  assert.doesNotMatch(result.stdout, /fixture exists only/);
+  assert.doesNotMatch(result.stdout, /descriptive list item/);
+  assert.doesNotMatch(result.stdout, /Use Markdown\./);
+  assert.doesNotMatch(result.stdout, /Keep it concise\./);
+  assert.deepEqual(
+    requests.map((request) => request.method),
+    [
+      "initialize",
+      "initialized",
+      "thread/loaded/list",
+      "thread/resume",
+      "thread/unsubscribe",
+    ],
+  );
+});
+
+test("requires confirmation before using a history-only Root Skill candidate", async (t) => {
+  const requests: Array<Record<string, unknown>> = [];
+  const skillPath = path.join(
+    repositoryRoot,
+    "test",
+    "fixtures",
+    "skills",
+    "trace-fixture",
+    "SKILL.md",
+  );
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+
+  server.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      requests.push(request);
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["thread-one"], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              cwd: repositoryRoot,
+              thread: {
+                id: "thread-one",
+                turns: [
+                  {
+                    id: "turn-one",
+                    status: "completed",
+                    items: [
+                      {
+                        type: "userMessage",
+                        id: "user-one",
+                        content: [
+                          {
+                            type: "text",
+                            text: "Use $trace-fixture for this work.",
+                            text_elements: [
+                              {
+                                byteRange: { start: 4, end: 18 },
+                                placeholder: "$trace-fixture",
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      } else if (request.method === "skills/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              data: [
+                {
+                  cwd: repositoryRoot,
+                  errors: [],
+                  skills: [
+                    {
+                      name: "trace-fixture",
+                      path: skillPath,
+                      description: "fixture",
+                      scope: "repo",
+                      enabled: true,
+                    },
+                  ],
+                },
+              ],
+            },
+          }),
+        );
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+  const result = await runCli(
+    ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+    { codexVersion: "codex-cli 0.145.0", stdin: "y\n" },
+  );
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(
+    result.stdout,
+    /Root Skill candidate inferred from replayed prompt text.*trace-fixture/,
+  );
+  assert.match(result.stdout, /Confirm inferred Root Skill.*\[y\/N\]:/);
+  assert.match(result.stdout, /Root Skill Attribution: confirmed.*trace-fixture/);
+  assert.match(result.stdout, /Run the full test suite once at the end\./);
+
+  const rejectedResult = await runCli(
+    ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+    { codexVersion: "codex-cli 0.145.0", stdin: "n\n" },
+  );
+
+  assert.equal(rejectedResult.exitCode, 0, rejectedResult.stderr);
+  assert.match(
+    rejectedResult.stdout,
+    /Root Skill candidate inferred from replayed prompt text.*trace-fixture/,
+  );
+  assert.match(
+    rejectedResult.stdout,
+    /Root Skill Attribution unresolved: developer rejected historical candidate/,
+  );
+  assert.match(rejectedResult.stdout, /Conformance evaluation is unavailable/);
+  assert.doesNotMatch(rejectedResult.stdout, /\[Skill Contract]/);
+  assert.deepEqual(
+    requests.map((request) => request.method),
+    [
+      "initialize",
+      "initialized",
+      "thread/loaded/list",
+      "thread/resume",
+      "skills/list",
+      "thread/unsubscribe",
+      "initialize",
+      "initialized",
+      "thread/loaded/list",
+      "thread/resume",
+      "skills/list",
+      "thread/unsubscribe",
+    ],
+  );
+});
+
+test("keeps tracing but blocks Conformance when historical skill mentions are unresolved", async (t) => {
+  const requests: Array<Record<string, unknown>> = [];
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+
+  server.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      requests.push(request);
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["thread-one"], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              cwd: repositoryRoot,
+              thread: {
+                id: "thread-one",
+                turns: [
+                  {
+                    id: "turn-one",
+                    status: "completed",
+                    items: [
+                      {
+                        type: "userMessage",
+                        id: "user-one",
+                        content: [
+                          {
+                            type: "text",
+                            text: "Compare $trace-fixture with $other-skill.",
+                            text_elements: [],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+  const result = await runCli(
+    ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+    { codexVersion: "codex-cli 0.145.0" },
+  );
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(result.stdout, /^\[user\].*Compare \$trace-fixture/m);
+  assert.match(
+    result.stdout,
+    /Root Skill Attribution unresolved: replayed prompt text mentioned multiple skills/,
+  );
+  assert.match(
+    result.stdout,
+    /Conformance evaluation is unavailable.*Trace collection was not affected/,
+  );
+  assert.doesNotMatch(result.stdout, /\[Skill Contract]/);
+  assert.doesNotMatch(result.stdout, /Confirm inferred Root Skill/);
+  assert.deepEqual(
+    requests.map((request) => request.method),
+    [
+      "initialize",
+      "initialized",
+      "thread/loaded/list",
+      "thread/resume",
+      "thread/unsubscribe",
+    ],
+  );
+});

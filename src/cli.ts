@@ -20,6 +20,7 @@ async function main(args: readonly string[]): Promise<void> {
       serverUrl,
       (line) => process.stdout.write(`${line}\n`),
       promptForLoadedThread,
+      promptForHistoricalRootSkill,
     );
     return;
   }
@@ -29,6 +30,20 @@ async function main(args: readonly string[]): Promise<void> {
     serverUrl,
     (line) => process.stdout.write(`${line}\n`),
   );
+}
+
+async function promptForHistoricalRootSkill(
+  rootSkill: { readonly name: string; readonly path: string },
+): Promise<boolean> {
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await prompt.question(
+      `Confirm inferred Root Skill ${JSON.stringify(rootSkill.name)} at ${rootSkill.path} [y/N]: `,
+    );
+    return answer.trim().toLowerCase() === "y";
+  } finally {
+    prompt.close();
+  }
 }
 
 async function promptForLoadedThread(

@@ -1,4 +1,9 @@
 import { AppServerClient } from "./app-server-client.js";
+import {
+  constructSkillContract,
+  renderSkillContract,
+  type RootSkillSelection,
+} from "./skill-contract.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -8,10 +13,23 @@ interface LoadedThreadsResponse {
 }
 
 interface ThreadResumeResponse {
+  readonly cwd?: string;
   readonly thread: {
     readonly id: string;
+    readonly cwd?: string;
     readonly turns: readonly HistoryTurn[];
   };
+}
+
+interface SkillsListResponse {
+  readonly data: readonly {
+    readonly cwd: string;
+    readonly skills: readonly {
+      readonly name: string;
+      readonly path: string;
+      readonly enabled: boolean;
+    }[];
+  }[];
 }
 
 interface HistoryTurn {
@@ -27,6 +45,7 @@ interface TraceEvent {
   readonly causalParentId: string;
   readonly method: string;
   readonly kind: string;
+  readonly observationSources: readonly ("history" | "live")[];
   readonly payload: JsonObject;
 }
 
@@ -41,6 +60,17 @@ interface ReplayCandidate {
   readonly method: LifecycleMethod;
   readonly payload: JsonObject;
   readonly bufferRank: number | null;
+  readonly observationSources: readonly ("history" | "live")[];
+}
+
+interface ThreadObservation {
+  readonly cwd: string | null;
+  readonly events: readonly TraceEvent[];
+}
+
+interface ResolvedAttribution {
+  readonly kind: "exact" | "confirmed";
+  readonly rootSkill: RootSkillSelection;
 }
 
 const SENSITIVE_DATA_WARNING =
@@ -54,6 +84,9 @@ export async function traceLoadedThread(
   writeLine: (line: string) => void,
   selectThread: (threadIds: readonly string[]) => Promise<string> =
     rejectMultipleThreads,
+  confirmHistoricalRootSkill: (
+    rootSkill: RootSkillSelection,
+  ) => Promise<boolean> = rejectHistoricalRootSkill,
 ): Promise<void> {
   writeLine(SENSITIVE_DATA_WARNING);
   const client = await AppServerClient.connect(serverUrl);
@@ -62,11 +95,33 @@ export async function traceLoadedThread(
     const threadIds = await listAllLoadedThreads(client);
     const threadId = await chooseLoadedThread(threadIds, writeLine, selectThread);
 
-    await observeResumedThread(client, threadId, writeLine);
+    const observation = await observeResumedThread(
+      client,
+      threadId,
+      writeLine,
+    );
+    const attribution = await resolveRootSkillAttribution(
+      client,
+      observation,
+      writeLine,
+      confirmHistoricalRootSkill,
+    );
+    if (attribution !== null) {
+      const { rootSkill } = attribution;
+      writeLine(
+        `Root Skill Attribution: ${attribution.kind} name=${JSON.stringify(rootSkill.name)} path=${rootSkill.path}`,
+      );
+      const contract = await constructSkillContract(rootSkill);
+      for (const line of renderSkillContract(contract)) writeLine(line);
+    }
     await client.request("thread/unsubscribe", { threadId });
   } finally {
     client.close();
   }
+}
+
+async function rejectHistoricalRootSkill(): Promise<false> {
+  return false;
 }
 
 async function chooseLoadedThread(
@@ -120,7 +175,7 @@ async function observeResumedThread(
   client: AppServerClient,
   threadId: string,
   writeLine: (line: string) => void,
-): Promise<void> {
+): Promise<ThreadObservation> {
   const pipeline = new EventPipeline(threadId, writeLine);
   const bufferedNotifications: JsonObject[] = [];
   let replayingHistory = true;
@@ -134,7 +189,7 @@ async function observeResumedThread(
     if (params?.threadId !== threadId) return;
     const method = notification.method;
     if (typeof method !== "string") return;
-    pipeline.append(method, params);
+    pipeline.append(method, params, ["live"]);
     if (method === "turn/completed") resolveCompletion();
   };
 
@@ -158,20 +213,194 @@ async function observeResumedThread(
       processNotification(notification);
     }
     await completion;
+    return Object.freeze({
+      cwd: response.cwd ?? response.thread.cwd ?? null,
+      events: pipeline.events(),
+    });
   } finally {
     removeHandler();
   }
+}
+
+async function resolveRootSkillAttribution(
+  client: AppServerClient,
+  observation: ThreadObservation,
+  writeLine: (line: string) => void,
+  confirmHistoricalRootSkill: (
+    rootSkill: RootSkillSelection,
+  ) => Promise<boolean>,
+): Promise<ResolvedAttribution | null> {
+  const exactSelections = uniqueRootSkills(
+    observation.events.flatMap((event) =>
+      event.observationSources.includes("live")
+        ? structuredSkillSelections(event)
+        : [],
+    ),
+  );
+  const exactRootSkill = exactSelections[0];
+  if (exactSelections.length === 1 && exactRootSkill !== undefined) {
+    return { kind: "exact", rootSkill: exactRootSkill };
+  }
+  if (exactSelections.length > 1) {
+    return unresolvedAttribution(
+      writeLine,
+      "structured live metadata identified multiple Root Skills",
+    );
+  }
+
+  const mentionedNames = historicalSkillMentions(observation.events);
+  if (mentionedNames.length === 0) {
+    return unresolvedAttribution(
+      writeLine,
+      "replayed prompt text did not identify a Root Skill candidate",
+    );
+  }
+  if (mentionedNames.length > 1 || observation.cwd === null) {
+    return unresolvedAttribution(
+      writeLine,
+      mentionedNames.length > 1
+        ? `replayed prompt text mentioned multiple skills: ${mentionedNames.join(", ")}`
+        : "the historical thread working directory is unavailable",
+    );
+  }
+
+  const mentionedName = mentionedNames[0];
+  if (mentionedName === undefined) {
+    return unresolvedAttribution(writeLine, "no Root Skill candidate was found");
+  }
+  const response = await client.request<SkillsListResponse>("skills/list", {
+    cwds: [observation.cwd],
+  });
+  const matchingSkills = uniqueRootSkills(
+    response.data.flatMap((entry) =>
+      entry.skills
+        .filter((skill) => skill.enabled && skill.name === mentionedName)
+        .map(({ name, path: skillPath }) => ({ name, path: skillPath })),
+    ),
+  );
+  const candidate = matchingSkills[0];
+  if (matchingSkills.length !== 1 || candidate === undefined) {
+    return unresolvedAttribution(
+      writeLine,
+      `historical mention ${JSON.stringify(`$${mentionedName}`)} did not resolve to exactly one enabled skill`,
+    );
+  }
+
+  writeLine(
+    `Root Skill candidate inferred from replayed prompt text: name=${JSON.stringify(candidate.name)} path=${candidate.path}. Developer confirmation is required.`,
+  );
+  if (!(await confirmHistoricalRootSkill(candidate))) {
+    return unresolvedAttribution(
+      writeLine,
+      `developer rejected historical candidate ${JSON.stringify(candidate.name)}`,
+    );
+  }
+  return { kind: "confirmed", rootSkill: candidate };
+}
+
+function unresolvedAttribution(
+  writeLine: (line: string) => void,
+  reason: string,
+): null {
+  writeLine(`Root Skill Attribution unresolved: ${reason}.`);
+  writeLine(
+    "Conformance evaluation is unavailable because Root Skill Attribution is unresolved; Trace collection was not affected.",
+  );
+  return null;
+}
+
+function historicalSkillMentions(
+  events: readonly TraceEvent[],
+): readonly string[] {
+  const historicalUserEvents = events.filter(
+    (event) =>
+      event.kind === "user" && event.observationSources.includes("history"),
+  );
+  const latestTurnId = historicalUserEvents.at(-1)?.causalParentId;
+  if (latestTurnId === undefined) return [];
+  const names = new Set<string>();
+  for (const event of historicalUserEvents) {
+    if (event.causalParentId !== latestTurnId) continue;
+    const item = asObject(event.payload.item);
+    if (item === null) continue;
+    if (item.type !== "userMessage" || !Array.isArray(item.content)) continue;
+    for (const contentItem of item.content) {
+      const content = asObject(contentItem);
+      if (content?.type !== "text" || typeof content.text !== "string") {
+        continue;
+      }
+      const placeholders = Array.isArray(content.text_elements)
+        ? content.text_elements
+        : Array.isArray(content.textElements)
+          ? content.textElements
+          : [];
+      for (const element of placeholders) {
+        const placeholder = asObject(element)?.placeholder;
+        if (typeof placeholder === "string") addSkillMention(names, placeholder);
+      }
+      for (const match of content.text.matchAll(/(?:^|[^\w])\$([a-z\d][\w:-]*)/gi)) {
+        const name = match[1];
+        if (name !== undefined) names.add(name);
+      }
+    }
+  }
+  return [...names];
+}
+
+function addSkillMention(names: Set<string>, placeholder: string): void {
+  const match = /^\$([a-z\d][\w:-]*)$/i.exec(placeholder.trim());
+  if (match?.[1] !== undefined) names.add(match[1]);
+}
+
+function structuredSkillSelections(
+  event: TraceEvent,
+): readonly RootSkillSelection[] {
+  if (event.method !== "item/started" && event.method !== "item/completed") {
+    return [];
+  }
+  const item = asObject(event.payload.item);
+  if (item?.type !== "userMessage" || !Array.isArray(item.content)) return [];
+
+  const selections: RootSkillSelection[] = [];
+  for (const contentItem of item.content) {
+    const content = asObject(contentItem);
+    if (
+      content?.type === "skill" &&
+      typeof content.name === "string" &&
+      typeof content.path === "string"
+    ) {
+      selections.push({ name: content.name, path: content.path });
+    }
+  }
+  return selections;
+}
+
+function uniqueRootSkills(
+  selections: readonly RootSkillSelection[],
+): readonly RootSkillSelection[] {
+  const unique = new Map(
+    selections.map((selection) => [
+      `${selection.name}\0${selection.path}`,
+      selection,
+    ]),
+  );
+  return [...unique.values()];
 }
 
 class EventPipeline {
   readonly #threadId: string;
   readonly #writeLine: (line: string) => void;
   readonly #seenEventIds = new Set<string>();
+  readonly #events: TraceEvent[] = [];
   #nextSourceSequence = 1;
 
   constructor(threadId: string, writeLine: (line: string) => void) {
     this.#threadId = threadId;
     this.#writeLine = writeLine;
+  }
+
+  events(): readonly TraceEvent[] {
+    return Object.freeze([...this.#events]);
   }
 
   replay(
@@ -213,6 +442,7 @@ class EventPipeline {
             method: "item/started",
             payload: predecessorPayload,
             bufferRank: minimumIndex(predecessors),
+            observationSources: ["live"],
           });
         }
         const payload = overlapping.reduce<JsonObject>(
@@ -228,6 +458,8 @@ class EventPipeline {
           method,
           payload,
           bufferRank: minimumIndex(overlapping),
+          observationSources:
+            overlapping.length === 0 ? ["history"] : ["history", "live"],
         });
         for (const { index } of overlapping.concat(predecessors)) {
           consumedNotificationIndexes.add(index);
@@ -249,7 +481,11 @@ class EventPipeline {
         : (anchoredCandidates[anchoredIndex++] ?? candidate),
     );
     for (const candidate of orderedCandidates) {
-      this.append(candidate.method, candidate.payload);
+      this.append(
+        candidate.method,
+        candidate.payload,
+        candidate.observationSources,
+      );
     }
 
     const remainingNotifications = bufferedNotifications.filter(
@@ -262,7 +498,11 @@ class EventPipeline {
     );
   }
 
-  append(method: string, params: JsonObject): void {
+  append(
+    method: string,
+    params: JsonObject,
+    observationSources: readonly ("history" | "live")[],
+  ): void {
     if (params.threadId !== this.#threadId) return;
     const kind = traceKind(method, params);
     if (kind === null) return;
@@ -283,8 +523,10 @@ class EventPipeline {
       causalParentId: `${this.#threadId}/${turnId}`,
       method,
       kind,
+      observationSources: Object.freeze([...observationSources]),
       payload: params,
     });
+    this.#events.push(event);
     this.#writeLine(renderEvent(event));
   }
 }

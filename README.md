@@ -50,6 +50,20 @@ per-thread sequence, and causal turn metadata. The Tracer does not start, steer,
 interrupt, or otherwise control the observed Skill Run, and unsubscribing does
 not affect the run.
 
+When the live user input includes Codex's structured skill name and path, the
+Tracer records exact Root Skill Attribution without prompting. If replayed
+history contains only a `$skill-name` mention, the Tracer resolves it against
+the skills available in the thread working directory and requires developer
+confirmation. Missing, ambiguous, or rejected historical candidates leave
+attribution unresolved and explicitly block later Conformance evaluation while
+preserving the completed Trace.
+
+For an attributed Root Skill, the Tracer constructs an execution-only Skill
+Contract from its `SKILL.md` and recursively linked Markdown instruction files.
+It reads those files as text without running referenced code, follows each file
+once with cycle deduplication, and retains behavioral instruction blocks
+while excluding contextual prose and final-result quality from the contract.
+
 The Live Trace is deliberately unredacted. Prompts, credentials, paths,
 proprietary content, personal data, and future evaluation inputs may appear in
 terminal output. Future Evaluation Runs will send the unredacted Skill Contract
