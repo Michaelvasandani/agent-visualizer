@@ -1,0 +1,3 @@
+# Passively attach through a shared Codex App Server
+
+The Tracer will observe a Skill Run by subscribing to the same shared Codex App Server used by an already-running interactive TUI. The session must have been launched against that server; arbitrary attachment to a vanilla TUI is not supported. The Tracer will not start, steer, interrupt, or otherwise control the observed turn. Launching a separate non-interactive run would provide a simpler stable event stream, while tailing private session files could reach vanilla sessions, but neither provides a trustworthy live view of the interactive workflow through a supported event protocol. This POC accepts the App Server's experimental status in exchange for true live subscription.
