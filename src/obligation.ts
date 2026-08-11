@@ -101,15 +101,12 @@ function sourceSchema(): JsonObject {
 }
 
 function obligationPrompt(contract: SkillContract): string {
-  const contractBlocks = contract.sources.map((source, sourceIndex) => ({
+  const blocks = instructionBlocks(contract.sources);
+  const contractBlocks = contract.sources.map((source) => ({
     path: source.path,
-    instructionBlocks: source.instructions
-      .split("\n\n")
-      .filter((instruction) => instruction !== "")
-      .map((instruction, blockIndex) => ({
-        blockId: `source-${sourceIndex + 1}:block-${blockIndex + 1}`,
-        instruction,
-      })),
+    instructionBlocks: blocks
+      .filter((block) => block.path === source.path)
+      .map(({ blockId, instruction }) => ({ blockId, instruction })),
   }));
   return [
     "Compile the unredacted Skill Contract below into execution Obligations.",
@@ -138,25 +135,23 @@ function parseObligations(
     );
   }
 
+  const blocks = instructionBlocks(sources);
   const instructionBlocksByPath = new Map(
     sources.map((source) => [
       source.path,
-      source.instructions.split("\n\n").filter((block) => block !== ""),
+      blocks
+        .filter((block) => block.path === source.path)
+        .map((block) => block.instruction),
     ]),
   );
   const instructionBlocksById = new Map<
     string,
     { readonly path: string; readonly instruction: string }
   >(
-    sources.flatMap((source, sourceIndex) =>
-      source.instructions
-        .split("\n\n")
-        .filter((instruction) => instruction !== "")
-        .map((instruction, blockIndex) => [
-          `source-${sourceIndex + 1}:block-${blockIndex + 1}`,
-          { path: source.path, instruction },
-        ] as const),
-    ),
+    blocks.map(({ blockId, path: sourcePath, instruction }) => [
+      blockId,
+      { path: sourcePath, instruction },
+    ] as const),
   );
   const uncoveredInstructions = new Set(
     [...instructionBlocksByPath].flatMap(([sourcePath, blocks]) =>
@@ -227,6 +222,23 @@ function parseObligations(
     );
   }
   return Object.freeze(obligations);
+}
+
+function instructionBlocks(sources: readonly SkillContractSource[]): readonly {
+  readonly blockId: string;
+  readonly path: string;
+  readonly instruction: string;
+}[] {
+  return sources.flatMap((source, sourceIndex) =>
+    source.instructions
+      .split("\n\n")
+      .filter((instruction) => instruction !== "")
+      .map((instruction, blockIndex) => ({
+        blockId: `source-${sourceIndex + 1}:block-${blockIndex + 1}`,
+        path: source.path,
+        instruction,
+      })),
+  );
 }
 
 function instructionIdentity(sourcePath: string, instruction: string): string {

@@ -28,3 +28,9 @@
   `019ff2df-eb26-74e3-9833-45efc2fdc7db` are absent from every Saved Trace
   Event. The checkpoint `$code-review` findings were addressed before moving
   this ticket to human review.
+- The required follow-up `$code-review` of `5f0e14e...0a87778` completed with
+  independent Standards and Spec reviewers. Its three Spec findings and two
+  duplication judgement calls were addressed: sanitized live evidence is now
+  committed, required broken Markdown references fail contract construction,
+  real child resume payloads and Evaluation envelopes are file-backed, and the
+  duplicated fixture/block construction is centralized.

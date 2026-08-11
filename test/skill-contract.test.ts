@@ -38,7 +38,7 @@ test("resolves explicit repository references from an external Root Skill", asyn
   );
 });
 
-test("ignores dangling Markdown examples in an external Root Skill", async () => {
+test("ignores explicitly optional dangling Markdown examples in an external Root Skill", async () => {
   const fixtureRoot = await mkdtemp(
     path.join(tmpdir(), "agent-tracer-contract-"),
   );
@@ -60,5 +60,28 @@ test("ignores dangling Markdown examples in an external Root Skill", async () =>
   assert.deepEqual(
     contract.sources.map((source) => source.path),
     [await realpath(skillPath)],
+  );
+});
+
+test("rejects a missing required Markdown reference instead of silently weakening the contract", async () => {
+  const fixtureRoot = await mkdtemp(
+    path.join(tmpdir(), "agent-tracer-contract-"),
+  );
+  const workingDirectory = path.join(fixtureRoot, "repository");
+  const skillDirectory = path.join(fixtureRoot, "external-skill");
+  const skillPath = path.join(skillDirectory, "SKILL.md");
+  await mkdir(workingDirectory, { recursive: true });
+  await mkdir(skillDirectory, { recursive: true });
+  await writeFile(
+    skillPath,
+    "Follow the required workflow in `docs/agents/misspelled.md`.\n",
+  );
+
+  await assert.rejects(
+    constructSkillContract(
+      { name: "external-skill", path: skillPath },
+      workingDirectory,
+    ),
+    /required Markdown reference.*docs\/agents\/misspelled\.md/i,
   );
 });

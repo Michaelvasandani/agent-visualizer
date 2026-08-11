@@ -147,10 +147,13 @@ ids for exact source linkage, and uses the supported schema subset. These
 changes have regression coverage.
 
 The successful post-run audit exported
-`/tmp/agent-tracer-code-review-final.json`. Its terminal outcome is completed;
-Root Skill Attribution is developer-confirmed; and its integrity is incomplete
-because the mid-turn resume returned notification-only history. The Saved
-Trace contains 15 replayable Events with the user, agent, collaboration,
+`/tmp/agent-tracer-code-review-final.json`. A sanitized copy is committed as
+`test/fixtures/codex-0.145.0/live-code-review-saved-trace.json` (SHA-256
+`f060a2bb0bd767f7a272823d8e6d29626544a7e59214f0dd54d29a6931763945`) so
+the completed run is independently inspectable. Its terminal outcome is
+completed; Root Skill Attribution is developer-confirmed; and its integrity is
+incomplete because the mid-turn resume returned notification-only history. The
+Saved Trace contains 15 replayable Events with the user, agent, collaboration,
 resource, and Unknown kinds. It contains 19 evaluable Obligations and 19
 Findings: 14 satisfied, 3 unobservable due to the recorded history gap, 2 not
 applicable, and 0 violated.
@@ -170,3 +173,11 @@ envelopes now live in a file-backed fault-injection capture consumed by the
 black-box suite, and this section replaces the incomplete initial-probe note
 with the completed evidence. The initial empty-diff topology probe remains
 excluded from acceptance.
+
+A follow-up two-axis review of `5f0e14e...0a87778` found three further Spec
+gaps and two duplication judgement calls. The follow-up fixes commit the
+sanitized Saved Trace, add sanitized `thread/resume` responses from both real
+reviewer children, drive Evaluation Run responses from file-backed protocol
+envelopes, reject unresolved required Markdown references while retaining
+explicitly optional examples, and centralize instruction-block and
+fault-fixture construction.

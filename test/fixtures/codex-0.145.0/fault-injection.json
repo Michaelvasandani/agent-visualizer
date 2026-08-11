@@ -67,6 +67,41 @@
   },
   "evaluationRuns": {
     "obligationThreadId": "fixture-evaluation-thread",
-    "conformanceThreadId": "fixture-evaluation-thread-conformance"
+    "conformanceThreadId": "fixture-evaluation-thread-conformance",
+    "capturedEnvelopes": {
+      "threadStartResult": {
+        "thread": { "id": "{{EVALUATION_THREAD_ID}}" }
+      },
+      "turnStartResult": {
+        "turn": {
+          "id": "{{EVALUATION_TURN_ID}}",
+          "status": "inProgress",
+          "items": []
+        }
+      },
+      "itemCompletedNotification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "{{EVALUATION_THREAD_ID}}",
+          "turnId": "{{EVALUATION_TURN_ID}}",
+          "item": {
+            "type": "agentMessage",
+            "id": "fixture-evaluation-message",
+            "text": "{{STRUCTURED_OUTPUT}}"
+          }
+        }
+      },
+      "turnCompletedNotification": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "{{EVALUATION_THREAD_ID}}",
+          "turn": {
+            "id": "{{EVALUATION_TURN_ID}}",
+            "status": "completed",
+            "items": []
+          }
+        }
+      }
+    }
   }
 }

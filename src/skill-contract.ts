@@ -70,11 +70,17 @@ export async function constructSkillContract(
 
     for (const reference of explicitFileReferences(stripFrontmatter(sourceText))) {
       const referencePath = await resolveReferencePath(
-        reference,
+        reference.path,
         sourcePath,
         workingDirectory,
       );
-      if (referencePath !== undefined) pendingPaths.push(referencePath);
+      if (referencePath !== undefined) {
+        pendingPaths.push(referencePath);
+      } else if (!reference.optional) {
+        throw new Error(
+          `Skill Contract required Markdown reference could not be resolved: ${reference.path} (from ${sourcePath})`,
+        );
+      }
     }
   }
 
@@ -217,24 +223,50 @@ function plainInstructionText(block: string): string {
     .trim();
 }
 
-function explicitFileReferences(markdown: string): readonly string[] {
-  const references = new Set<string>();
+interface ExplicitFileReference {
+  readonly path: string;
+  readonly optional: boolean;
+}
+
+function explicitFileReferences(
+  markdown: string,
+): readonly ExplicitFileReference[] {
+  const references = new Map<string, boolean>();
   const links = /(?<!!)\[[^\]]*]\(([^)]+)\)/g;
   for (const match of markdown.matchAll(links)) {
-    addLocalMarkdownReference(references, markdownLinkTarget(match[1] ?? ""));
+    addLocalMarkdownReference(
+      references,
+      markdownLinkTarget(match[1] ?? ""),
+      referenceIsOptional(markdown, match.index),
+    );
   }
   for (const match of markdown.matchAll(/^\s*\[[^\]]+]:\s*(\S+)/gm)) {
-    addLocalMarkdownReference(references, match[1] ?? "");
+    addLocalMarkdownReference(
+      references,
+      match[1] ?? "",
+      referenceIsOptional(markdown, match.index),
+    );
   }
   for (const match of markdown.matchAll(/`([^`\r\n]+\.md(?:[?#][^`\r\n]*)?)`/gi)) {
-    addLocalMarkdownReference(references, match[1] ?? "");
+    addLocalMarkdownReference(
+      references,
+      match[1] ?? "",
+      referenceIsOptional(markdown, match.index),
+    );
   }
   for (const match of markdown.matchAll(
     /(?:^|[\s("'=])((?:\.{1,2}\/|\/)?[a-z\d_./-]+\.md)(?=$|[\s)"',:;])/gim,
   )) {
-    addLocalMarkdownReference(references, match[1] ?? "");
+    addLocalMarkdownReference(
+      references,
+      match[1] ?? "",
+      referenceIsOptional(markdown, match.index),
+    );
   }
-  return [...references];
+  return [...references].map(([referencePath, optional]) => ({
+    path: referencePath,
+    optional,
+  }));
 }
 
 function markdownLinkTarget(rawTarget: string): string {
@@ -244,14 +276,33 @@ function markdownLinkTarget(rawTarget: string): string {
 }
 
 function addLocalMarkdownReference(
-  references: Set<string>,
+  references: Map<string, boolean>,
   rawTarget: string,
+  optional: boolean,
 ): void {
   const target = rawTarget.trim();
   if (target === "" || target.startsWith("#")) return;
   if (/^[a-z][a-z\d+.-]*:/i.test(target)) return;
   const withoutFragment = target.split(/[?#]/, 1)[0];
   if (withoutFragment?.toLowerCase().endsWith(".md")) {
-    references.add(decodeURIComponent(withoutFragment));
+    const referencePath = decodeURIComponent(withoutFragment);
+    references.set(
+      referencePath,
+      (references.get(referencePath) ?? true) && optional,
+    );
   }
+}
+
+function referenceIsOptional(
+  markdown: string,
+  index: number | undefined,
+): boolean {
+  if (index === undefined) return false;
+  const lineStart = markdown.lastIndexOf("\n", index) + 1;
+  const lineEndCandidate = markdown.indexOf("\n", index);
+  const lineEnd = lineEndCandidate === -1 ? markdown.length : lineEndCandidate;
+  const line = markdown.slice(lineStart, lineEnd);
+  return /\b(?:such as|for example|e\.g\.|if (?:it is |they are )?(?:present|available)|when (?:it is |they are )?(?:present|available))\b/i.test(
+    line,
+  );
 }

@@ -19,6 +19,44 @@ interface CliResult {
   readonly stderr: string;
 }
 
+interface EvaluationRunCapturedEnvelopes {
+  readonly threadStartResult: Record<string, unknown>;
+  readonly turnStartResult: Record<string, unknown>;
+  readonly itemCompletedNotification: Record<string, unknown>;
+  readonly turnCompletedNotification: Record<string, unknown>;
+}
+
+interface FaultInjectionFixture {
+  readonly terminalTurns: {
+    readonly failed: Record<string, unknown>;
+    readonly cancelled: Record<string, unknown>;
+  };
+  readonly reconnect: {
+    readonly liveNotification: Record<string, unknown>;
+    readonly recoveredThread: Record<string, unknown>;
+  };
+  readonly evaluationRuns: {
+    readonly obligationThreadId: string;
+    readonly conformanceThreadId: string;
+    readonly capturedEnvelopes: EvaluationRunCapturedEnvelopes;
+  };
+}
+
+async function readFaultInjectionFixture(): Promise<FaultInjectionFixture> {
+  return JSON.parse(
+    await readFile(
+      path.join(
+        repositoryRoot,
+        "test",
+        "fixtures",
+        "codex-0.145.0",
+        "fault-injection.json",
+      ),
+      "utf8",
+    ),
+  ) as FaultInjectionFixture;
+}
+
 async function runCli(
   args: readonly string[],
   options: {
@@ -76,6 +114,7 @@ function respondToEvaluationRun(
     readonly findings?: readonly Record<string, unknown>[];
     readonly threadId?: string;
     readonly turnId?: string;
+    readonly capturedEnvelopes?: EvaluationRunCapturedEnvelopes;
   },
 ): boolean {
   const params = request.params as Record<string, unknown> | undefined;
@@ -92,7 +131,15 @@ function respondToEvaluationRun(
     socket.send(
       JSON.stringify({
         id: request.id,
-        result: { thread: { id: threadId } },
+        result:
+          fixture.capturedEnvelopes === undefined
+            ? { thread: { id: threadId } }
+            : replaceEvaluationPlaceholders(
+                fixture.capturedEnvelopes.threadStartResult,
+                threadId,
+                turnId,
+                "",
+              ),
       }),
     );
     return true;
@@ -101,9 +148,15 @@ function respondToEvaluationRun(
   socket.send(
     JSON.stringify({
       id: request.id,
-      result: {
-        turn: { id: turnId, status: "inProgress", items: [] },
-      },
+      result:
+        fixture.capturedEnvelopes === undefined
+          ? { turn: { id: turnId, status: "inProgress", items: [] } }
+          : replaceEvaluationPlaceholders(
+              fixture.capturedEnvelopes.turnStartResult,
+              threadId,
+              turnId,
+              "",
+            ),
     }),
   );
   setImmediate(() => {
@@ -135,23 +188,31 @@ function respondToEvaluationRun(
             violationBasis: "none",
           },
         }));
+    const structuredOutput = JSON.stringify(
+      isConformanceRun ? { findings } : { obligations: fixture.obligations },
+    );
     socket.send(
-      JSON.stringify({
-        method: "item/completed",
-        params: {
-          threadId,
-          turnId,
-          item: {
-            type: "agentMessage",
-            id: "fixture-evaluation-message",
-            text: JSON.stringify(
-              isConformanceRun
-                ? { findings }
-                : { obligations: fixture.obligations },
+      JSON.stringify(
+        fixture.capturedEnvelopes === undefined
+          ? {
+              method: "item/completed",
+              params: {
+                threadId,
+                turnId,
+                item: {
+                  type: "agentMessage",
+                  id: "fixture-evaluation-message",
+                  text: structuredOutput,
+                },
+              },
+            }
+          : replaceEvaluationPlaceholders(
+              fixture.capturedEnvelopes.itemCompletedNotification,
+              threadId,
+              turnId,
+              structuredOutput,
             ),
-          },
-        },
-      }),
+      ),
     );
     for (const item of isConformanceRun ? [] : fixture.additionalItems ?? []) {
       socket.send(
@@ -162,20 +223,52 @@ function respondToEvaluationRun(
       );
     }
     socket.send(
-      JSON.stringify({
-        method: "turn/completed",
-        params: {
-          threadId,
-          turn: {
-            id: turnId,
-            status: "completed",
-            items: [],
-          },
-        },
-      }),
+      JSON.stringify(
+        fixture.capturedEnvelopes === undefined
+          ? {
+              method: "turn/completed",
+              params: {
+                threadId,
+                turn: {
+                  id: turnId,
+                  status: "completed",
+                  items: [],
+                },
+              },
+            }
+          : replaceEvaluationPlaceholders(
+              fixture.capturedEnvelopes.turnCompletedNotification,
+              threadId,
+              turnId,
+              "",
+            ),
+      ),
     );
   });
   return true;
+}
+
+function replaceEvaluationPlaceholders(
+  value: unknown,
+  threadId: string,
+  turnId: string,
+  structuredOutput: string,
+): unknown {
+  if (value === "{{EVALUATION_THREAD_ID}}") return threadId;
+  if (value === "{{EVALUATION_TURN_ID}}") return turnId;
+  if (value === "{{STRUCTURED_OUTPUT}}") return structuredOutput;
+  if (Array.isArray(value)) {
+    return value.map((item) =>
+      replaceEvaluationPlaceholders(item, threadId, turnId, structuredOutput),
+    );
+  }
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      replaceEvaluationPlaceholders(item, threadId, turnId, structuredOutput),
+    ]),
+  );
 }
 
 function traceFixtureObligations(
@@ -902,24 +995,20 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
     readonly threadId: string;
     readonly history: Record<string, unknown>;
     readonly notifications: readonly Record<string, unknown>[];
+    readonly childResumeResponses: readonly {
+      readonly result: {
+        readonly thread: {
+          readonly parentThreadId: string;
+          readonly threadSource: string;
+          readonly turns: readonly {
+            readonly status: string;
+            readonly items: readonly Record<string, unknown>[];
+          }[];
+        };
+      };
+    }[];
   };
-  const faultFixture = JSON.parse(
-    await readFile(
-      path.join(
-        repositoryRoot,
-        "test",
-        "fixtures",
-        "codex-0.145.0",
-        "fault-injection.json",
-      ),
-      "utf8",
-    ),
-  ) as {
-    readonly evaluationRuns: {
-      readonly obligationThreadId: string;
-      readonly conformanceThreadId: string;
-    };
-  };
+  const faultFixture = await readFaultInjectionFixture();
   const acceptanceContract = await constructSkillContract({
     name: "acceptance-code-review",
     path: skillPath,
@@ -1000,6 +1089,8 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
         respondToEvaluationRun(socket, request, {
           obligations,
           threadId: faultFixture.evaluationRuns.obligationThreadId,
+          capturedEnvelopes:
+            faultFixture.evaluationRuns.capturedEnvelopes,
         })
       ) {
         return;
@@ -1043,6 +1134,27 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
   assert.match(result.stdout, /Skill Run terminal outcome: completed/);
   assert.match(result.stdout, /Finding summary:/);
   assert.match(result.stdout, /Saved Trace exported/);
+  assert.equal(fixture.childResumeResponses.length, 2);
+  assert.equal(
+    fixture.childResumeResponses.every(
+      ({ result }) =>
+        result.thread.parentThreadId === fixture.threadId &&
+        result.thread.threadSource === "subagent" &&
+        result.thread.turns.some(
+          (turn) => turn.status === "completed" && turn.items.length > 0,
+        ),
+    ),
+    true,
+  );
+  assert.deepEqual(
+    Object.keys(faultFixture.evaluationRuns.capturedEnvelopes),
+    [
+      "threadStartResult",
+      "turnStartResult",
+      "itemCompletedNotification",
+      "turnCompletedNotification",
+    ],
+  );
   assert.equal(
     saved.events.some((event) =>
       JSON.stringify(event).includes(
@@ -1065,24 +1177,57 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
   );
 });
 
-test("reports failed and cancelled Skill Run outcomes without calling them Incomplete Traces", async (t) => {
-  const faultFixture = JSON.parse(
+test("commits sanitized Saved Trace evidence for the real code-review acceptance", async () => {
+  const evidence = JSON.parse(
     await readFile(
       path.join(
         repositoryRoot,
         "test",
         "fixtures",
         "codex-0.145.0",
-        "fault-injection.json",
+        "live-code-review-saved-trace.json",
       ),
       "utf8",
     ),
   ) as {
-    readonly terminalTurns: {
-      readonly failed: Record<string, unknown>;
-      readonly cancelled: Record<string, unknown>;
+    readonly schemaVersion: number;
+    readonly protocolCompatibility: {
+      readonly codexCli: string;
+      readonly codexAppServer: string;
     };
+    readonly terminalOutcome: { readonly kind: string };
+    readonly traceIntegrity: { readonly complete: boolean };
+    readonly events: readonly { readonly sourceId: string }[];
+    readonly obligations: readonly unknown[];
+    readonly findings: readonly { readonly state: string }[];
   };
+
+  assert.equal(evidence.schemaVersion, 1);
+  assert.deepEqual(evidence.protocolCompatibility, {
+    codexCli: "0.145.0",
+    codexAppServer: "0.145.0",
+  });
+  assert.equal(evidence.terminalOutcome.kind, "completed");
+  assert.equal(evidence.traceIntegrity.complete, false);
+  assert.equal(evidence.events.length, 15);
+  assert.equal(evidence.obligations.length, 19);
+  assert.deepEqual(
+    Object.fromEntries(
+      ["satisfied", "unobservable", "not applicable", "violated"].map(
+        (state) => [
+          state,
+          evidence.findings.filter((finding) => finding.state === state).length,
+        ],
+      ),
+    ),
+    { satisfied: 14, unobservable: 3, "not applicable": 2, violated: 0 },
+  );
+  assert.equal(new Set(evidence.events.map((event) => event.sourceId)).size, 1);
+  assert.doesNotMatch(JSON.stringify(evidence), /michaelvasandani|\/Users\//i);
+});
+
+test("reports failed and cancelled Skill Run outcomes without calling them Incomplete Traces", async (t) => {
+  const faultFixture = await readFaultInjectionFixture();
   const terminalTurns = [
     faultFixture.terminalTurns.failed,
     faultFixture.terminalTurns.cancelled,
@@ -1163,23 +1308,7 @@ test("reports failed and cancelled Skill Run outcomes without calling them Incom
 });
 
 test("reconnects, recovers all available item history, and deduplicates activity", async (t) => {
-  const faultFixture = JSON.parse(
-    await readFile(
-      path.join(
-        repositoryRoot,
-        "test",
-        "fixtures",
-        "codex-0.145.0",
-        "fault-injection.json",
-      ),
-      "utf8",
-    ),
-  ) as {
-    readonly reconnect: {
-      readonly liveNotification: Record<string, unknown>;
-      readonly recoveredThread: Record<string, unknown>;
-    };
-  };
+  const faultFixture = await readFaultInjectionFixture();
   let connectionNumber = 0;
   const requests: Array<Record<string, unknown>> = [];
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
