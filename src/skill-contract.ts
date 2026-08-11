@@ -299,9 +299,28 @@ function referenceIsOptional(
 ): boolean {
   if (index === undefined) return false;
   const clause = referenceClause(markdown, index);
-  return /\b(?:such as|for example|e\.g\.|if (?:it is |they are )?(?:present|available)|when (?:it is |they are )?(?:present|available))\b/i.test(
+  if (
+    /\b(?:if|when) (?:it is |they are )?(?:present|available)\b/i.test(
+      clause,
+    )
+  ) {
+    return true;
+  }
+  const exampleIndex = lastMatchIndex(
     clause,
+    /\b(?:such as|for example|e\.g\.)\b/gi,
   );
+  const requirementIndex = lastMatchIndex(
+    clause,
+    /\b(?:must|shall|required|mandatory)\b/gi,
+  );
+  return exampleIndex >= 0 && requirementIndex < exampleIndex;
+}
+
+function lastMatchIndex(value: string, pattern: RegExp): number {
+  let result = -1;
+  for (const match of value.matchAll(pattern)) result = match.index;
+  return result;
 }
 
 function referenceClause(markdown: string, index: number): string {

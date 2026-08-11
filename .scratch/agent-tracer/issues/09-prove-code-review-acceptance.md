@@ -39,3 +39,7 @@
   are decided per clause, so example wording cannot hide a required reference
   elsewhere on the same line. Evaluation fixture envelopes share one typed
   materialization helper.
+- Trace-integrity regressions now prove that partial descendant histories mark
+  the Trace incomplete and that older child history is never appended after
+  live child Events have established the source sequence. Mandatory wording
+  after an example marker cannot make a required Markdown reference optional.

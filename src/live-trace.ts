@@ -95,6 +95,12 @@ interface RecoveryCheckpoint {
   readonly sourceIds: readonly string[];
 }
 
+interface DescendantHistoryReplay {
+  readonly replayedSourceIds: ReadonlySet<string>;
+  readonly subscribedSourceIds: ReadonlySet<string>;
+  readonly gapReasons: readonly string[];
+}
+
 const SENSITIVE_DATA_WARNING =
   "WARNING: THIS LIVE TRACE CONTAINS UNREDACTED SENSITIVE INFORMATION. " +
   "Prompts, credentials, paths, proprietary content, and personal data may be " +
@@ -271,6 +277,7 @@ async function observeResumedThread(
       historyCheckpoint,
       isRecovery ? "reconnect history" : "initial history",
       result.replayedHistorySourceIds,
+      result.descendantHistoryGapReasons,
     );
     gaps.push(...historyGaps);
     if (
@@ -289,9 +296,7 @@ async function observeResumedThread(
         cwd,
         events: pipeline.events(),
         gaps: Object.freeze([...gaps]),
-        subscribedThreadIds: Object.freeze([
-          ...result.replayedHistorySourceIds,
-        ]),
+        subscribedThreadIds: Object.freeze([...result.subscribedThreadIds]),
         terminalOutcome: result.terminalOutcome,
       });
     }
@@ -318,6 +323,8 @@ async function observeConnection(
 ): Promise<{
   readonly response: ThreadResumeResponse;
   readonly replayedHistorySourceIds: ReadonlySet<string>;
+  readonly subscribedThreadIds: ReadonlySet<string>;
+  readonly descendantHistoryGapReasons: readonly string[];
   readonly terminalOutcome: TerminalOutcome | null;
 }> {
   const bufferedNotifications: JsonObject[] = [];
@@ -366,11 +373,21 @@ async function observeConnection(
         completion,
         client.whenClosed().then(() => null),
       ]));
-    const replayedHistorySourceIds =
+    const descendantReplay =
       terminalOutcome === null
-        ? new Set([threadId])
+        ? {
+            replayedSourceIds: new Set([threadId]),
+            subscribedSourceIds: new Set([threadId]),
+            gapReasons: [],
+          }
         : await replayDescendantHistories(client, threadId, pipeline);
-    return { response, replayedHistorySourceIds, terminalOutcome };
+    return {
+      response,
+      replayedHistorySourceIds: descendantReplay.replayedSourceIds,
+      subscribedThreadIds: descendantReplay.subscribedSourceIds,
+      descendantHistoryGapReasons: descendantReplay.gapReasons,
+      terminalOutcome,
+    };
   } finally {
     removeHandler();
   }
@@ -380,20 +397,48 @@ async function replayDescendantHistories(
   client: AppServerClient,
   rootThreadId: string,
   pipeline: EventPipeline,
-): Promise<ReadonlySet<string>> {
+): Promise<DescendantHistoryReplay> {
   const replayedSourceIds = new Set([rootThreadId]);
+  const subscribedSourceIds = new Set([rootThreadId]);
+  const gapReasons: string[] = [];
   const attemptedSourceIds = new Set([rootThreadId]);
   while (true) {
     const sourceId = pipeline
       .sourceIds()
       .find((candidate) => !attemptedSourceIds.has(candidate));
-    if (sourceId === undefined) return replayedSourceIds;
+    if (sourceId === undefined) {
+      return Object.freeze({
+        replayedSourceIds,
+        subscribedSourceIds,
+        gapReasons: Object.freeze(gapReasons),
+      });
+    }
     attemptedSourceIds.add(sourceId);
+    if (pipeline.hasEvents(sourceId)) {
+      gapReasons.push(
+        `source ${sourceId} had live activity before descendant history replay`,
+      );
+      continue;
+    }
     try {
       const response = await client.request<ThreadResumeResponse>(
         "thread/resume",
         { threadId: sourceId },
       );
+      subscribedSourceIds.add(sourceId);
+      for (const turn of response.thread.turns) {
+        if (turn.itemsView !== undefined && turn.itemsView !== "full") {
+          gapReasons.push(
+            `source ${sourceId} turn ${turn.id} itemsView=${turn.itemsView}`,
+          );
+        }
+      }
+      if (pipeline.hasEvents(sourceId)) {
+        gapReasons.push(
+          `source ${sourceId} received live activity during descendant history replay`,
+        );
+        continue;
+      }
       pipeline.replay(sourceId, response.thread.turns, []);
       replayedSourceIds.add(sourceId);
     } catch {
@@ -408,6 +453,7 @@ function findHistoryGaps(
   checkpoint: RecoveryCheckpoint,
   historyBoundary: TraceGap["historyBoundary"],
   replayedHistorySourceIds: ReadonlySet<string>,
+  descendantHistoryGapReasons: readonly string[],
 ): readonly TraceGap[] {
   const incompleteViews = turns.flatMap((turn) =>
     turn.itemsView !== undefined && turn.itemsView !== "full"
@@ -422,12 +468,13 @@ function findHistoryGaps(
     historyBoundary === "initial history" &&
     turns.length === 0 &&
     incompleteViews.length === 0 &&
-    unavailableDescendants.length === 0
+    unavailableDescendants.length === 0 &&
+    descendantHistoryGapReasons.length === 0
   ) {
     return [];
   }
 
-  const reasons = [...incompleteViews];
+  const reasons = [...incompleteViews, ...descendantHistoryGapReasons];
   if (historyBoundary === "reconnect history") {
     reasons.push(
       "notification-only activity is unavailable from resumed history",
@@ -685,6 +732,10 @@ class EventPipeline {
 
   sourceIds(): readonly string[] {
     return Object.freeze([...this.#knownSourceIds]);
+  }
+
+  hasEvents(sourceId: string): boolean {
+    return this.#events.some((event) => event.sourceId === sourceId);
   }
 
   replay(

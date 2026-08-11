@@ -108,3 +108,26 @@ test("does not let an optional example hide a required reference in a later clau
     /required Markdown reference.*docs\/agents\/required\.md/i,
   );
 });
+
+test("does not classify an explicitly mandatory reference as an optional example", async () => {
+  const fixtureRoot = await mkdtemp(
+    path.join(tmpdir(), "agent-tracer-contract-"),
+  );
+  const workingDirectory = path.join(fixtureRoot, "repository");
+  const skillDirectory = path.join(fixtureRoot, "external-skill");
+  const skillPath = path.join(skillDirectory, "SKILL.md");
+  await mkdir(workingDirectory, { recursive: true });
+  await mkdir(skillDirectory, { recursive: true });
+  await writeFile(
+    skillPath,
+    "For example, you must follow `docs/agents/required.md` exactly.\n",
+  );
+
+  await assert.rejects(
+    constructSkillContract(
+      { name: "mandatory-example-reference", path: skillPath },
+      workingDirectory,
+    ),
+    /required Markdown reference.*docs\/agents\/required\.md/i,
+  );
+});

@@ -1286,6 +1286,107 @@ test("commits sanitized Saved Trace evidence for the real code-review acceptance
   assert.doesNotMatch(JSON.stringify(evidence), /michaelvasandani|\/Users\//i);
 });
 
+test("marks partial descendant history as an Incomplete Trace", async (t) => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+
+  server.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      const params = request.params as { readonly threadId?: unknown } | undefined;
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["partial-parent"], nextCursor: null },
+          }),
+        );
+      } else if (
+        request.method === "thread/resume" &&
+        params?.threadId === "partial-parent"
+      ) {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              thread: {
+                id: "partial-parent",
+                turns: [
+                  {
+                    id: "partial-parent-turn",
+                    itemsView: "full",
+                    status: "completed",
+                    items: [
+                      {
+                        type: "subAgentActivity",
+                        id: "partial-child-start",
+                        kind: "started",
+                        agentThreadId: "partial-child",
+                        agentPath: "/root/partial-child",
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      } else if (
+        request.method === "thread/resume" &&
+        params?.threadId === "partial-child"
+      ) {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              thread: {
+                id: "partial-child",
+                turns: [
+                  {
+                    id: "partial-child-turn",
+                    itemsView: "summary",
+                    status: "completed",
+                    items: [
+                      {
+                        type: "agentMessage",
+                        id: "partial-child-message",
+                        text: "available child summary",
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+  const result = await runCli(
+    ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+    { codexVersion: "codex-cli 0.145.0" },
+  );
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(result.stdout, /source=partial-child.*available child summary/m);
+  assert.match(
+    result.stdout,
+    /Incomplete Trace:.*partial-child.*itemsView=summary/i,
+  );
+});
+
 test("reports failed and cancelled Skill Run outcomes without calling them Incomplete Traces", async (t) => {
   const faultFixture = await readFaultInjectionFixture();
   const terminalTurns = [
@@ -3137,6 +3238,34 @@ test("renders complete reported activity with causal per-source sequencing", asy
           }),
         );
       } else if (request.method === "thread/resume") {
+        const params = request.params as { readonly threadId?: unknown };
+        if (params.threadId === "thread-child") {
+          socket.send(
+            JSON.stringify({
+              id: request.id,
+              result: {
+                thread: {
+                  id: "thread-child",
+                  turns: [
+                    {
+                      id: "turn-child",
+                      itemsView: "full",
+                      status: "completed",
+                      items: [
+                        {
+                          type: "agentMessage",
+                          id: "older-child-history",
+                          text: "must-not-replay-after-live-child-events",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            }),
+          );
+          return;
+        }
         socket.send(
           JSON.stringify({
             id: request.id,
@@ -3383,4 +3512,5 @@ test("renders complete reported activity with causal per-source sequencing", asy
     /^\[turn\].*source=thread-parent sequence=9.*timing=.*"startedAt":1700000000.*"completedAt":1700000002.*"durationMs":2000/m,
   );
   assert.doesNotMatch(result.stdout, /inferred File Change/i);
+  assert.doesNotMatch(result.stdout, /must-not-replay-after-live-child-events/);
 });
