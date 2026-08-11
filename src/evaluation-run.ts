@@ -49,8 +49,11 @@ export async function runStructuredEvaluation(
     const turn = asObject(params.turn);
     if (evaluationTurnId !== null && turn?.id !== evaluationTurnId) return;
     if (turn?.status !== "completed") {
+      const errorDetail = turn?.error === undefined
+        ? ""
+        : `: ${JSON.stringify(turn.error)}`;
       terminalError = new Error(
-        `${input.label} ended with status ${JSON.stringify(turn?.status)}.`,
+        `${input.label} ended with status ${JSON.stringify(turn?.status)}${errorDetail}.`,
       );
     }
     resolveCompletion();

@@ -7,6 +7,8 @@ import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { WebSocketServer, type WebSocket } from "ws";
 
+import { constructSkillContract } from "../src/skill-contract.js";
+
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const cliPath = path.join(repositoryRoot, "src", "cli.ts");
 const tsxImport = import.meta.resolve("tsx");
@@ -901,16 +903,35 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
     readonly history: Record<string, unknown>;
     readonly notifications: readonly Record<string, unknown>[];
   };
-  const obligations = [
-    "Inspect the changed files before reporting.",
-    "Run Standards and Spec reviews as parallel subagents.",
-    "Report the Standards and Spec axes separately.",
-  ].map((instruction, index) => ({
-    id: `acceptance-obligation-${index + 1}`,
-    status: "evaluable",
-    source: { path: skillPath, instruction },
-    observableBehavior: `The captured run performs acceptance behavior ${index + 1}.`,
-  }));
+  const faultFixture = JSON.parse(
+    await readFile(
+      path.join(
+        repositoryRoot,
+        "test",
+        "fixtures",
+        "codex-0.145.0",
+        "fault-injection.json",
+      ),
+      "utf8",
+    ),
+  ) as {
+    readonly evaluationRuns: {
+      readonly obligationThreadId: string;
+      readonly conformanceThreadId: string;
+    };
+  };
+  const acceptanceContract = await constructSkillContract({
+    name: "acceptance-code-review",
+    path: skillPath,
+  });
+  const obligations = acceptanceContract.sources.flatMap((source) =>
+    source.instructions.split("\n\n").map((instruction, index) => ({
+      id: `acceptance-obligation-${index + 1}`,
+      status: "evaluable",
+      source: { path: source.path, instruction },
+      observableBehavior: `The captured run performs acceptance behavior ${index + 1}.`,
+    })),
+  );
   const requests: Array<Record<string, unknown>> = [];
   const exportDirectory = await mkdtemp(
     path.join(tmpdir(), "agent-tracer-captured-acceptance-"),
@@ -975,7 +996,12 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
             },
           }),
         );
-      } else if (respondToEvaluationRun(socket, request, { obligations })) {
+      } else if (
+        respondToEvaluationRun(socket, request, {
+          obligations,
+          threadId: faultFixture.evaluationRuns.obligationThreadId,
+        })
+      ) {
         return;
       } else if (request.method === "thread/unsubscribe") {
         socket.send(JSON.stringify({ id: request.id, result: {} }));
@@ -1004,6 +1030,14 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
   assert.match(result.stdout, /Root Skill Attribution: confirmed/);
   assert.match(result.stdout, /^\[command\].*git diff --stat/m);
   assert.match(result.stdout, /^\[resource\].*"totalTokens":144/m);
+  assert.match(
+    result.stdout,
+    /^\[collaboration\].*captured-standards-thread.*standards_review/m,
+  );
+  assert.match(
+    result.stdout,
+    /^\[collaboration\].*captured-spec-thread.*spec_review/m,
+  );
   assert.match(result.stdout, /^\[unknown\].*thread\/goal\/cleared/m);
   assert.match(result.stdout, /"durationMs":2000/);
   assert.match(result.stdout, /Skill Run terminal outcome: completed/);
@@ -1011,7 +1045,9 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
   assert.match(result.stdout, /Saved Trace exported/);
   assert.equal(
     saved.events.some((event) =>
-      JSON.stringify(event).includes("fixture-evaluation-thread"),
+      JSON.stringify(event).includes(
+        faultFixture.evaluationRuns.obligationThreadId,
+      ),
     ),
     false,
   );
@@ -1030,13 +1066,34 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
 });
 
 test("reports failed and cancelled Skill Run outcomes without calling them Incomplete Traces", async (t) => {
+  const faultFixture = JSON.parse(
+    await readFile(
+      path.join(
+        repositoryRoot,
+        "test",
+        "fixtures",
+        "codex-0.145.0",
+        "fault-injection.json",
+      ),
+      "utf8",
+    ),
+  ) as {
+    readonly terminalTurns: {
+      readonly failed: Record<string, unknown>;
+      readonly cancelled: Record<string, unknown>;
+    };
+  };
+  const terminalTurns = [
+    faultFixture.terminalTurns.failed,
+    faultFixture.terminalTurns.cancelled,
+  ];
   let connectionNumber = 0;
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise<void>((resolve) => server.once("listening", resolve));
   t.after(() => server.close());
 
   server.on("connection", (socket) => {
-    const status = connectionNumber++ === 0 ? "failed" : "interrupted";
+    const terminalTurn = terminalTurns[connectionNumber++];
     socket.on("message", (data) => {
       const request = JSON.parse(data.toString()) as Record<string, unknown>;
       if (request.method === "initialize") {
@@ -1071,19 +1128,7 @@ test("reports failed and cancelled Skill Run outcomes without calling them Incom
               method: "turn/completed",
               params: {
                 threadId: "thread-terminal",
-                turn: {
-                  id: "turn-terminal",
-                  status,
-                  error:
-                    status === "failed"
-                      ? {
-                          message: "model stream failed",
-                          codexErrorInfo: null,
-                          additionalDetails: "private failure details",
-                        }
-                      : null,
-                  items: [],
-                },
+                turn: terminalTurn,
               },
             }),
           );
@@ -1118,6 +1163,23 @@ test("reports failed and cancelled Skill Run outcomes without calling them Incom
 });
 
 test("reconnects, recovers all available item history, and deduplicates activity", async (t) => {
+  const faultFixture = JSON.parse(
+    await readFile(
+      path.join(
+        repositoryRoot,
+        "test",
+        "fixtures",
+        "codex-0.145.0",
+        "fault-injection.json",
+      ),
+      "utf8",
+    ),
+  ) as {
+    readonly reconnect: {
+      readonly liveNotification: Record<string, unknown>;
+      readonly recoveredThread: Record<string, unknown>;
+    };
+  };
   let connectionNumber = 0;
   const requests: Array<Record<string, unknown>> = [];
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -1152,18 +1214,7 @@ test("reconnects, recovers all available item history, and deduplicates activity
         );
         setImmediate(() => {
           socket.send(
-            JSON.stringify({
-              method: "item/started",
-              params: {
-                threadId: "thread-recovery",
-                turnId: "turn-recovery",
-                item: {
-                  id: "user-recovery",
-                  type: "userMessage",
-                  content: [{ type: "text", text: "recover this trace" }],
-                },
-              },
-            }),
+            JSON.stringify(faultFixture.reconnect.liveNotification),
             () => socket.close(),
           );
         });
@@ -1172,33 +1223,7 @@ test("reconnects, recovers all available item history, and deduplicates activity
           JSON.stringify({
             id: request.id,
             result: {
-              thread: {
-                id: "thread-recovery",
-                turns: [
-                  {
-                    id: "turn-recovery",
-                    status: "completed",
-                    itemsView: "full",
-                    error: null,
-                    items: [
-                      {
-                        id: "user-recovery",
-                        type: "userMessage",
-                        content: [{ type: "text", text: "recover this trace" }],
-                      },
-                      {
-                        id: "command-recovered",
-                        type: "commandExecution",
-                        status: "completed",
-                        command: "npm test",
-                        cwd: "/workspace",
-                        aggregatedOutput: "recovered output",
-                        exitCode: 0,
-                      },
-                    ],
-                  },
-                ],
-              },
+              thread: faultFixture.reconnect.recoveredThread,
             },
           }),
         );
@@ -2184,21 +2209,14 @@ test("compiles source-linked Obligations in an isolated Evaluation Run", async (
             {
               id: "obligation-1",
               status: "evaluable",
-              source: {
-                path: skillPath,
-                instruction:
-                  "Upload the unredacted contract-secret-atlas exactly once using the release tool.",
-              },
+              source: { blockId: "source-1:block-1" },
               observableBehavior:
                 "The release tool is called exactly once with contract-secret-atlas.",
             },
             {
               id: "obligation-2",
               status: "ambiguous",
-              source: {
-                path: skillPath,
-                instruction: "Handle the remaining details appropriately.",
-              },
+              source: { blockId: "source-1:block-2" },
               ambiguity:
                 "The instruction does not define which details or observable handling is appropriate.",
             },
@@ -2271,6 +2289,7 @@ test("compiles source-linked Obligations in an isolated Evaluation Run", async (
     )?.outputSchema?.properties?.obligations?.type,
     "array",
   );
+  assert.doesNotMatch(JSON.stringify(turnStart?.params), /"oneOf"/);
   assert.deepEqual(
     requests
       .filter((request) => request.method === "thread/unsubscribe")
@@ -2400,7 +2419,7 @@ test("evaluates every evaluable Obligation after termination and explains all Fi
       obligationId: "obligation-4",
       state: "not applicable",
       evidenceEventIds: [userEventId],
-      explanation: "No deployment condition arose.",
+      explanation: "The overall report shows no deployment condition arose.",
       assessment: {
         observationGapAffected: false,
         eventSourceCoverage: "fully-reported",
@@ -2542,6 +2561,7 @@ test("evaluates every evaluable Obligation after termination and explains all Fi
   assert.match(JSON.stringify(conformanceTurn?.params), /observed-turn/);
   assert.match(JSON.stringify(conformanceTurn?.params), /Call the release tool once/);
   assert.match(JSON.stringify(conformanceTurn?.params), /release-call/);
+  assert.doesNotMatch(JSON.stringify(conformanceTurn?.params), /uniqueItems/);
 });
 
 test("rejects absence as violation when event-source reporting coverage is limited", async () => {

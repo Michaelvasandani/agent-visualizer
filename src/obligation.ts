@@ -41,30 +41,22 @@ const OBLIGATIONS_SCHEMA = {
     obligations: {
       type: "array",
       items: {
-        oneOf: [
-          {
-            type: "object",
-            additionalProperties: false,
-            required: ["id", "status", "source", "observableBehavior"],
-            properties: {
-              id: { type: "string", minLength: 1 },
-              status: { const: "evaluable" },
-              source: sourceSchema(),
-              observableBehavior: { type: "string", minLength: 1 },
-            },
-          },
-          {
-            type: "object",
-            additionalProperties: false,
-            required: ["id", "status", "source", "ambiguity"],
-            properties: {
-              id: { type: "string", minLength: 1 },
-              status: { const: "ambiguous" },
-              source: sourceSchema(),
-              ambiguity: { type: "string", minLength: 1 },
-            },
-          },
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "id",
+          "status",
+          "source",
+          "observableBehavior",
+          "ambiguity",
         ],
+        properties: {
+          id: { type: "string", minLength: 1 },
+          status: { type: "string", enum: ["evaluable", "ambiguous"] },
+          source: sourceSchema(),
+          observableBehavior: { type: "string" },
+          ambiguity: { type: "string" },
+        },
       },
     },
   },
@@ -101,20 +93,29 @@ function sourceSchema(): JsonObject {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["path", "instruction"],
+    required: ["blockId"],
     properties: {
-      path: { type: "string", minLength: 1 },
-      instruction: { type: "string", minLength: 1 },
+      blockId: { type: "string", minLength: 1 },
     },
   };
 }
 
 function obligationPrompt(contract: SkillContract): string {
+  const contractBlocks = contract.sources.map((source, sourceIndex) => ({
+    path: source.path,
+    instructionBlocks: source.instructions
+      .split("\n\n")
+      .filter((instruction) => instruction !== "")
+      .map((instruction, blockIndex) => ({
+        blockId: `source-${sourceIndex + 1}:block-${blockIndex + 1}`,
+        instruction,
+      })),
+  }));
   return [
     "Compile the unredacted Skill Contract below into execution Obligations.",
-    "The instructions field of each source contains complete instruction blocks separated by blank lines. Return at least one Obligation for every block. Create an evaluable Obligation only when the block confidently maps to observable execution behavior. Preserve every uncertain interpretation as an ambiguous Obligation; ambiguous Obligations must explain the uncertainty and must not invent observable behavior. Every source.path must equal the contract source path, and every source.instruction must equal the complete instruction block from which the Obligation was derived. Multiple Obligations may cite the same block. Do not assess final-result quality and do not evaluate any Obligation against Trace Evidence.",
+    "Return at least one Obligation for every instruction block. Copy its blockId into source.blockId; the Tracer will map that identifier back to the canonical source path and instruction. Create an evaluable Obligation only when the block confidently maps to observable execution behavior; set ambiguity to an empty string. Preserve every uncertain interpretation as an ambiguous Obligation; explain the uncertainty in ambiguity and set observableBehavior to an empty string. Multiple Obligations may cite the same block. Do not assess final-result quality and do not evaluate any Obligation against Trace Evidence.",
     "",
-    JSON.stringify(contract),
+    JSON.stringify({ rootSkill: contract.rootSkill, sources: contractBlocks }),
   ].join("\n");
 }
 
@@ -143,6 +144,20 @@ function parseObligations(
       source.instructions.split("\n\n").filter((block) => block !== ""),
     ]),
   );
+  const instructionBlocksById = new Map<
+    string,
+    { readonly path: string; readonly instruction: string }
+  >(
+    sources.flatMap((source, sourceIndex) =>
+      source.instructions
+        .split("\n\n")
+        .filter((instruction) => instruction !== "")
+        .map((instruction, blockIndex) => [
+          `source-${sourceIndex + 1}:block-${blockIndex + 1}`,
+          { path: source.path, instruction },
+        ] as const),
+    ),
+  );
   const uncoveredInstructions = new Set(
     [...instructionBlocksByPath].flatMap(([sourcePath, blocks]) =>
       blocks.map((block) => instructionIdentity(sourcePath, block)),
@@ -158,8 +173,14 @@ function parseObligations(
     ids.add(id);
 
     const source = asObject(obligation?.source);
-    const sourcePath = requiredString(source?.path, `Obligation ${id} source path`);
-    const instruction = requiredString(
+    const blockId = typeof source?.blockId === "string" ? source.blockId : null;
+    const canonicalSource =
+      blockId === null ? undefined : instructionBlocksById.get(blockId);
+    const sourcePath = canonicalSource?.path ?? requiredString(
+      source?.path,
+      `Obligation ${id} source path`,
+    );
+    const instruction = canonicalSource?.instruction ?? requiredString(
       source?.instruction,
       `Obligation ${id} source instruction`,
     );

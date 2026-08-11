@@ -1,0 +1,72 @@
+{
+  "capture": {
+    "codexVersion": "0.145.0",
+    "capturedOn": "2026-08-11",
+    "origin": "sanitized deterministic App Server fault-injection capture",
+    "scope": "failure, cancellation, reconnect recovery, and Evaluation Run isolation",
+    "note": "These envelopes are emitted by the black-box harness because deliberately causing these conditions in the manual acceptance run would be unsafe or nondeterministic."
+  },
+  "terminalTurns": {
+    "failed": {
+      "id": "turn-terminal",
+      "status": "failed",
+      "error": {
+        "message": "model stream failed",
+        "codexErrorInfo": null,
+        "additionalDetails": "private failure details"
+      },
+      "items": []
+    },
+    "cancelled": {
+      "id": "turn-terminal",
+      "status": "interrupted",
+      "error": null,
+      "items": []
+    }
+  },
+  "reconnect": {
+    "liveNotification": {
+      "method": "item/started",
+      "params": {
+        "threadId": "thread-recovery",
+        "turnId": "turn-recovery",
+        "item": {
+          "id": "user-recovery",
+          "type": "userMessage",
+          "content": [{ "type": "text", "text": "recover this trace" }]
+        }
+      }
+    },
+    "recoveredThread": {
+      "id": "thread-recovery",
+      "turns": [
+        {
+          "id": "turn-recovery",
+          "status": "completed",
+          "itemsView": "full",
+          "error": null,
+          "items": [
+            {
+              "id": "user-recovery",
+              "type": "userMessage",
+              "content": [{ "type": "text", "text": "recover this trace" }]
+            },
+            {
+              "id": "command-recovered",
+              "type": "commandExecution",
+              "status": "completed",
+              "command": "npm test",
+              "cwd": "/workspace",
+              "aggregatedOutput": "recovered output",
+              "exitCode": 0
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "evaluationRuns": {
+    "obligationThreadId": "fixture-evaluation-thread",
+    "conformanceThreadId": "fixture-evaluation-thread-conformance"
+  }
+}

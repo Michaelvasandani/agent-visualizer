@@ -118,6 +118,34 @@
       }
     },
     {
+      "method": "item/completed",
+      "params": {
+        "threadId": "captured-parent-thread",
+        "turnId": "captured-code-review-turn",
+        "item": {
+          "type": "subAgentActivity",
+          "id": "captured-standards-reviewer",
+          "kind": "started",
+          "agentThreadId": "captured-standards-thread",
+          "agentPath": "/root/standards_review"
+        }
+      }
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "threadId": "captured-parent-thread",
+        "turnId": "captured-code-review-turn",
+        "item": {
+          "type": "subAgentActivity",
+          "id": "captured-spec-reviewer",
+          "kind": "started",
+          "agentThreadId": "captured-spec-thread",
+          "agentPath": "/root/spec_review"
+        }
+      }
+    },
+    {
       "method": "turn/completed",
       "params": {
         "threadId": "captured-parent-thread",

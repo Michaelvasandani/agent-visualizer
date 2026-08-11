@@ -37,3 +37,28 @@ test("resolves explicit repository references from an external Root Skill", asyn
     [await realpath(skillPath), await realpath(repositoryInstruction)],
   );
 });
+
+test("ignores dangling Markdown examples in an external Root Skill", async () => {
+  const fixtureRoot = await mkdtemp(
+    path.join(tmpdir(), "agent-tracer-contract-"),
+  );
+  const workingDirectory = path.join(fixtureRoot, "repository");
+  const skillDirectory = path.join(fixtureRoot, "external-skill");
+  const skillPath = path.join(skillDirectory, "SKILL.md");
+  await mkdir(workingDirectory, { recursive: true });
+  await mkdir(skillDirectory, { recursive: true });
+  await writeFile(
+    skillPath,
+    "Use repository standards, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`, when present.\n",
+  );
+
+  const contract = await constructSkillContract(
+    { name: "external-skill", path: skillPath },
+    workingDirectory,
+  );
+
+  assert.deepEqual(
+    contract.sources.map((source) => source.path),
+    [await realpath(skillPath)],
+  );
+});

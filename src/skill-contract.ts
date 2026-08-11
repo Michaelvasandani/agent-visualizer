@@ -69,9 +69,12 @@ export async function constructSkillContract(
     sources.push(Object.freeze({ path: sourcePath, instructions }));
 
     for (const reference of explicitFileReferences(stripFrontmatter(sourceText))) {
-      pendingPaths.push(
-        await resolveReferencePath(reference, sourcePath, workingDirectory),
+      const referencePath = await resolveReferencePath(
+        reference,
+        sourcePath,
+        workingDirectory,
       );
+      if (referencePath !== undefined) pendingPaths.push(referencePath);
     }
   }
 
@@ -85,25 +88,33 @@ async function resolveReferencePath(
   reference: string,
   sourcePath: string,
   workingDirectory: string | undefined,
-): Promise<string> {
-  if (path.isAbsolute(reference)) return reference;
-  const sourceRelativePath = path.resolve(path.dirname(sourcePath), reference);
-  if (workingDirectory === undefined) return sourceRelativePath;
-  try {
-    await stat(sourceRelativePath);
-    return sourceRelativePath;
-  } catch (error) {
-    if (!isMissingPathError(error)) throw error;
+): Promise<string | undefined> {
+  if (path.isAbsolute(reference)) {
+    return (await pathExists(reference)) ? reference : undefined;
   }
-  return path.resolve(workingDirectory, reference);
+  const sourceRelativePath = path.resolve(path.dirname(sourcePath), reference);
+  if (await pathExists(sourceRelativePath)) return sourceRelativePath;
+  if (workingDirectory === undefined) return undefined;
+  const repositoryRelativePath = path.resolve(workingDirectory, reference);
+  return (await pathExists(repositoryRelativePath))
+    ? repositoryRelativePath
+    : undefined;
 }
 
-function isMissingPathError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    (error.code === "ENOENT" || error.code === "ENOTDIR")
-  );
+async function pathExists(candidate: string): Promise<boolean> {
+  try {
+    await stat(candidate);
+    return true;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR")
+    ) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 export function renderSkillContract(contract: SkillContract): readonly string[] {

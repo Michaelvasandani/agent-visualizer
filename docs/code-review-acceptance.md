@@ -76,6 +76,27 @@ jq '{schemaVersion, protocolCompatibility, run, terminalOutcome, traceIntegrity,
   /tmp/agent-tracer-code-review.json
 ```
 
+If `jq` is unavailable, use Node.js to inspect the same fields; Node.js is
+already required by this project:
+
+```sh
+node --input-type=module -e '
+  import { readFile } from "node:fs/promises";
+  const trace = JSON.parse(await readFile(process.argv[1], "utf8"));
+  console.log({
+    schemaVersion: trace.schemaVersion,
+    protocolCompatibility: trace.protocolCompatibility,
+    run: trace.run,
+    terminalOutcome: trace.terminalOutcome,
+    traceIntegrity: trace.traceIntegrity,
+    skillAttribution: trace.skillAttribution,
+    eventKinds: [...new Set(trace.events.map((event) => event.kind))].sort(),
+    obligationCount: trace.obligations.length,
+    findingCount: trace.findings.length,
+  });
+' /tmp/agent-tracer-code-review.json
+```
+
 Evaluation Runs are excluded when every saved Event belongs to the observed
 thread or one of its causally reported descendants. The deterministic
 black-box acceptance test additionally assigns recognizable Evaluation Run
@@ -109,10 +130,43 @@ The deterministic fixture inventory and capture provenance are documented in
 
 ## Recorded acceptance
 
-The repository records the exact live result here after the fixture and
-documentation changes have a non-empty commit range for `$code-review` to
-review. The initial topology probe on 2026-08-11 verified the shared server,
-interactive TUI, passive command/resource/token/duration observation, and the
-history confirmation prompt. It intentionally does not count as final
-acceptance because its fixed point equaled `HEAD`, so `$code-review` correctly
-stopped before spawning its two reviewers.
+The final run completed on 2026-08-11 with `codex-cli 0.145.0`, fixed point
+`4ed8844`, and reviewed commit `5f0e14e`. The interactive `$code-review` turn
+ran on thread `019ff2c8-14c7-7ab3-9472-d28e600ccbc5`, spawned the independent
+Standards and Spec reviewers, completed in 165,781 ms, and reported its axes
+separately. The attached live terminal observed user, agent, reasoning,
+command, collaboration, resource/token, Unknown, thread, and turn activity.
+Codex emitted no generic tool or File Change item for this read-only review, so
+the Tracer did not invent those categories.
+
+The first attached run exposed two real integration defects before export:
+external skills can mention absent Markdown examples, and Codex 0.145.0's
+structured-output endpoint rejects `oneOf` and `uniqueItems`. The final code
+ignores dangling supporting-file examples, uses deterministic instruction-block
+ids for exact source linkage, and uses the supported schema subset. These
+changes have regression coverage.
+
+The successful post-run audit exported
+`/tmp/agent-tracer-code-review-final.json`. Its terminal outcome is completed;
+Root Skill Attribution is developer-confirmed; and its integrity is incomplete
+because the mid-turn resume returned notification-only history. The Saved
+Trace contains 15 replayable Events with the user, agent, collaboration,
+resource, and Unknown kinds. It contains 19 evaluable Obligations and 19
+Findings: 14 satisfied, 3 unobservable due to the recorded history gap, 2 not
+applicable, and 0 violated.
+
+The successful Evaluation Runs used ephemeral threads
+`019ff2df-60bf-7b41-a6f9-22d1f7c0991f` and
+`019ff2df-eb26-74e3-9833-45efc2fdc7db`. Neither identifier appears anywhere in
+the Saved Trace Events; every saved Event has the observed parent thread as its
+source. This confirms Evaluation Run isolation for the live acceptance, while
+the deterministic black-box test verifies the same boundary with recognizable
+fixture ids.
+
+The required `$code-review` found one Standards judgement call and two Spec
+gaps in the checkpoint commit. The duplicated fixture instructions now derive
+from the fixture Skill Contract, failure/cancellation/reconnect/Evaluation
+envelopes now live in a file-backed fault-injection capture consumed by the
+black-box suite, and this section replaces the incomplete initial-probe note
+with the completed evidence. The initial empty-diff topology probe remains
+excluded from acceptance.

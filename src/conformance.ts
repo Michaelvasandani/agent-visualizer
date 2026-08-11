@@ -65,7 +65,6 @@ const FINDINGS_SCHEMA = {
           },
           evidenceEventIds: {
             type: "array",
-            uniqueItems: true,
             items: { type: "string", minLength: 1 },
           },
           explanation: { type: "string", minLength: 1 },
@@ -180,7 +179,7 @@ function findingPrompt(input: {
 }): string {
   return [
     "Evaluate each evaluable Obligation exactly once against only the supplied Trace Events. Do not return a Finding for ambiguous Obligations. Use exactly one state: satisfied, violated, unobservable, or not applicable. Every Finding must cite at least one supplied Event id. Preserve instruction meaning; do not assess final-result quality.",
-    "A violated Finding must use violationBasis=contradiction when cited Events contradict the Obligation, or violationBasis=absence only when the Trace has no gaps and the event source fully reports the required behavior. If a Finding depends on any listed gap, set observationGapAffected=true and state=unobservable. If a listed coverage limitation affects it, set eventSourceCoverage=limited and state=unobservable. Otherwise use eventSourceCoverage=fully-reported. For every non-violated Finding, use violationBasis=none. A conditional instruction whose condition did not arise is not applicable.",
+    "A violated Finding must use violationBasis=contradiction when cited Events contradict the Obligation, or violationBasis=absence only when the Trace has no gaps and the event source fully reports the required behavior. If a Finding depends on any listed gap, set observationGapAffected=true and state=unobservable. If a listed coverage limitation affects it, set eventSourceCoverage=limited and state=unobservable. The state unobservable is forbidden when observationGapAffected=false and eventSourceCoverage=fully-reported; in that case choose satisfied, violated, or not applicable. Otherwise use eventSourceCoverage=fully-reported. For every non-violated Finding, use violationBasis=none. A conditional instruction whose condition did not arise is not applicable.",
     "The Skill Run has already terminated. Its terminal outcome does not prevent evaluation.",
     "Do not include a run-level conclusion, score, pass/fail statement, or verdict in any explanation.",
     "",
@@ -379,7 +378,6 @@ function validateClassification(input: {
 
 function containsRunLevelConclusion(explanation: string): boolean {
   return (
-    /\boverall\b/i.test(explanation) ||
     /\b(?:numeric )?score\b/i.test(explanation) ||
     /\bverdict\b/i.test(explanation) ||
     /\bpass\s*\/\s*fail\b/i.test(explanation) ||
