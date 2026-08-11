@@ -47,5 +47,6 @@ remains explicit.
 Synthetic failure details and disconnect timing in `fault-injection.json` are
 assertions about deterministic Tracer edge behavior. The equivalent normal
 failure, cancellation, reconnect, and Evaluation shapes in
-`live-failure-recovery.json` came from Codex 0.145.0 and were only sanitized.
-The files remain separate so provenance cannot be mistaken.
+`live-failure-recovery.json` came from Codex 0.145.0. The selected envelopes
+omit unrelated fields and notifications and sanitize sensitive values. The
+files remain separate so provenance cannot be mistaken.

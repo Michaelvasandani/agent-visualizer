@@ -1574,7 +1574,14 @@ test("marks partial descendant history as an Incomplete Trace", async (t) => {
   );
   assert.doesNotMatch(result.stdout, /must-not-mix-an-earlier-skill-run/);
   assert.doesNotMatch(result.stdout, /must-not-mix-a-buffered-skill-run/);
-  assert.doesNotMatch(result.stdout, /must-not-mix-a-turnless-root-event/);
+  assert.doesNotMatch(
+    result.stdout,
+    /^\[unknown\] must-not-mix-a-turnless-root-event/m,
+  );
+  assert.match(
+    result.stdout,
+    /Incomplete Trace:.*turn-less root notification must-not-mix-a-turnless-root-event could not be attributed/i,
+  );
   assert.doesNotMatch(result.stdout, /must-not-mix-earlier-child-history/);
   assert.doesNotMatch(result.stdout, /must-not-mix-later-child-history/);
 });

@@ -116,11 +116,11 @@ accepted as soon as the observed turn terminates, before descendant replay, so
 a later root turn cannot contaminate the finished Skill Run. The selected root
 turn id remains pinned across reconnects, buffered or live root notifications
 from another turn are ignored, and turn-less root notifications are excluded
-when they cannot be attributed safely. Descendant replay uses the child thread
-creation time and selected Root Skill turn window, retaining every causal child
-turn while excluding inherited earlier work and later unrelated work. When the
-timestamps needed for that decision are absent, it reports a gap instead of
-guessing.
+when they cannot be attributed safely; each excluded method creates an explicit
+root-source Trace Gap. Descendant replay uses the child thread creation time and
+selected Root Skill turn window, retaining every causal child turn while
+excluding inherited earlier work and later unrelated work. When the timestamps
+needed for that decision are absent, it reports a gap instead of guessing.
 
 ## Codex 0.145.0 limitations
 

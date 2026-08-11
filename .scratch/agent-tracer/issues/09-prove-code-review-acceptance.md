@@ -50,10 +50,11 @@
 - The isolated evidence replay uses one parent turn and the causally bounded
   reviewer work from each spawned child. Root activity is filtered by the
   pinned turn id before and after reconnect; turn-less root notifications are
-  excluded because they cannot be attributed safely; inherited and later child
-  turns are excluded by child-creation and Root Skill turn timestamps. The
-  sanitized Saved Trace contains 15 Events across exactly three sources. Its 17
-  Findings are 16 satisfied, 1 not applicable, and 0 violated or unobservable.
+  excluded because they cannot be attributed safely and create an explicit
+  root-source Trace Gap; inherited and later child turns are excluded by
+  child-creation and Root Skill turn timestamps. The sanitized Saved Trace
+  contains 15 Events across exactly three sources. Its 17 Findings are 16
+  satisfied, 1 not applicable, and 0 violated or unobservable.
 - A separate sacrificial real 0.145.0 capture now proves an invalid-model failed
   turn, an interrupted turn, client disconnect followed by `thread/resume`, and
   a completed structured-output Evaluation Run without disturbing the observed

@@ -3,7 +3,7 @@
     "codexVersion": "0.145.0",
     "capturedAt": "2026-08-11",
     "kind": "sanitized-real-shared-app-server-capture",
-    "note": "Sacrificial threads outside the observed acceptance thread; identifiers, timestamps, paths, and error text are sanitized without changing protocol shape."
+    "note": "Selected envelopes from sacrificial threads outside the observed acceptance thread; unrelated notifications and fields are omitted, and identifiers, timestamps, paths, and error text are sanitized."
   },
   "failure": {
     "errorNotification": {

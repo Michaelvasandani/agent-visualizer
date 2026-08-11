@@ -298,6 +298,7 @@ async function observeResumedThread(
       isRecovery ? "reconnect history" : "initial history",
       result.completeSourceIds,
       result.descendantHistoryGaps,
+      result.rootNotificationGapReasons,
     );
     gaps.push(...historyGaps);
     if (
@@ -347,12 +348,14 @@ async function observeConnection(
   readonly completeSourceIds: ReadonlySet<string>;
   readonly subscribedThreadIds: ReadonlySet<string>;
   readonly descendantHistoryGaps: readonly DescendantHistoryGap[];
+  readonly rootNotificationGapReasons: readonly string[];
   readonly terminalOutcome: TerminalOutcome | null;
 }> {
   const bufferedNotifications: JsonObject[] = [];
   let replayingHistory = true;
   let liveTerminalOutcome: TerminalOutcome | null = null;
   let rootTurnWindow: TurnWindow = { startedAt: null, completedAt: null };
+  const turnlessRootNotificationMethods = new Set<string>();
   let resolveCompletion: (outcome: TerminalOutcome) => void = () => undefined;
   const completion = new Promise<TerminalOutcome>((resolve) => {
     resolveCompletion = resolve;
@@ -364,6 +367,12 @@ async function observeConnection(
     if (params === null) return;
     const method = notification.method;
     if (typeof method !== "string") return;
+    if (
+      params.threadId === threadId &&
+      notificationTurnId(params) === null
+    ) {
+      turnlessRootNotificationMethods.add(method);
+    }
     const scoped = scopeRootNotification(params, threadId, observedTurnId);
     observedTurnId = scoped.selectedTurnId;
     if (!scoped.include) return;
@@ -415,6 +424,13 @@ async function observeConnection(
         const params = asObject(notification.params);
         if (params === null) return true;
         if (
+          typeof notification.method === "string" &&
+          params.threadId === threadId &&
+          notificationTurnId(params) === null
+        ) {
+          turnlessRootNotificationMethods.add(notification.method);
+        }
+        if (
           historicalOutcome !== null &&
           params.threadId !== threadId
         ) {
@@ -463,6 +479,12 @@ async function observeConnection(
       completeSourceIds: descendantReplay.completeSourceIds,
       subscribedThreadIds: descendantReplay.subscribedSourceIds,
       descendantHistoryGaps: descendantReplay.gaps,
+      rootNotificationGapReasons: Object.freeze(
+        [...turnlessRootNotificationMethods].map(
+          (method) =>
+            `turn-less root notification ${method} could not be attributed to the selected Skill Run`,
+        ),
+      ),
       terminalOutcome,
     };
   } finally {
@@ -570,13 +592,14 @@ function findHistoryGaps(
   historyBoundary: TraceGap["historyBoundary"],
   completeSourceIds: ReadonlySet<string>,
   descendantHistoryGaps: readonly DescendantHistoryGap[],
+  rootNotificationGapReasons: readonly string[],
 ): readonly TraceGap[] {
   const incompleteViews = turns.flatMap((turn) =>
     turn.itemsView !== undefined && turn.itemsView !== "full"
       ? [`turn ${turn.id} itemsView=${turn.itemsView}`]
       : [],
   );
-  const rootReasons = [...incompleteViews];
+  const rootReasons = [...incompleteViews, ...rootNotificationGapReasons];
   if (historyBoundary === "reconnect history") {
     rootReasons.push(
       "notification-only activity is unavailable from resumed history",
