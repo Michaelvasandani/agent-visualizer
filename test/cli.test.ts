@@ -631,6 +631,37 @@ test("rejects an unsupported Saved Trace schema version", async () => {
   assert.match(replayed.stderr, /Saved Trace schema version must be 1/i);
 });
 
+test("rejects Saved Trace protocol metadata from an unsupported Codex version", async () => {
+  const workingDirectory = await mkdtemp(
+    path.join(tmpdir(), "agent-tracer-protocol-version-"),
+  );
+  const savedTracePath = path.join(workingDirectory, "incompatible.json");
+  const observed = await runConformanceValidationFixture({
+    traceArgs: ["--export", savedTracePath],
+  });
+  const saved = JSON.parse(
+    await readFile(savedTracePath, "utf8"),
+  ) as Record<string, unknown>;
+  await writeFile(
+    savedTracePath,
+    JSON.stringify({
+      ...saved,
+      protocolCompatibility: {
+        codexCli: "0.145.0",
+        codexAppServer: "0.146.0",
+      },
+    }),
+  );
+
+  const replayed = await runCli(["replay", "--file", savedTracePath], {
+    codexVersion: "codex-cli 0.145.0",
+  });
+
+  assert.equal(observed.exitCode, 0, observed.stderr);
+  assert.equal(replayed.exitCode, 1);
+  assert.match(replayed.stderr, /protocol compatibility must be Codex 0\.145\.0/i);
+});
+
 test("rejects an unsupported Codex version before observation", async () => {
   const result = await runCli(["trace", "--server", "ws://127.0.0.1:1"], {
     codexVersion: "codex-cli 0.146.0",

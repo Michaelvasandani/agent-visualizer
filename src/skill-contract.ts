@@ -6,6 +6,16 @@ export interface RootSkillSelection {
   readonly path: string;
 }
 
+export type SkillAttribution =
+  | {
+      readonly kind: "exact" | "confirmed";
+      readonly rootSkill: RootSkillSelection;
+    }
+  | {
+      readonly kind: "unresolved";
+      readonly reason: string;
+    };
+
 export interface SkillContractSource {
   readonly path: string;
   readonly instructions: string;

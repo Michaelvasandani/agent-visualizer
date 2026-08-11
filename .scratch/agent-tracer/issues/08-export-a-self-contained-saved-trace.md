@@ -30,5 +30,12 @@
   event identity, causal parent and source-parent identity, source depth, and
   per-source sequence.
 - Black-box coverage proves the memory-only default, explicit export, required
-  bundle sections, schema-version rejection, complete nested payload
-  preservation, and identical Event rendering after an export/load round trip.
+  bundle sections, schema and protocol-version rejection, complete nested
+  payload preservation, and identical Event rendering after an export/load
+  round trip. Focused loader coverage rejects malformed required sections and
+  restores normalized Events as deeply immutable snapshots.
+- Two-axis code review found no documented-standard violations. Its spec finding
+  that schema-version-1 loads did not validate exact protocol compatibility,
+  required bundle shape, or immutable Event fields was fixed with regression
+  coverage. Its sole style judgment, duplicated Skill Attribution rendering,
+  was addressed by sharing the live and replay projection.

@@ -12,12 +12,12 @@ import {
 import {
   exportSavedTrace,
   SAVED_TRACE_SENSITIVE_DATA_WARNING,
-  type SkillAttribution,
 } from "./saved-trace.js";
 import {
   constructSkillContract,
   renderSkillContract,
   type RootSkillSelection,
+  type SkillAttribution,
   type SkillContract,
 } from "./skill-contract.js";
 import {
@@ -29,6 +29,7 @@ import {
 import type { TerminalOutcome, TraceGap } from "./trace-observation.js";
 import {
   projectTraceEvents,
+  renderSkillAttribution,
   renderTerminalOutcome,
   renderTraceIntegrity,
 } from "./trace-projection.js";
@@ -134,14 +135,12 @@ export async function traceLoadedThread(
       writeLine,
       confirmHistoricalRootSkill,
     );
+    renderSkillAttribution(skillAttribution, writeLine);
     let skillContract: SkillContract | null = null;
     let obligations: readonly Obligation[] = Object.freeze([]);
     let findings: readonly Finding[] = Object.freeze([]);
     if (skillAttribution.kind !== "unresolved") {
       const { rootSkill } = skillAttribution;
-      writeLine(
-        `Root Skill Attribution: ${skillAttribution.kind} name=${JSON.stringify(rootSkill.name)} path=${rootSkill.path}`,
-      );
       skillContract = await constructSkillContract(rootSkill);
       for (const line of renderSkillContract(skillContract)) writeLine(line);
       obligations = await compileObligations(client, skillContract);
@@ -473,7 +472,6 @@ async function resolveRootSkillAttribution(
   }
   if (exactSelections.length > 1) {
     return unresolvedAttribution(
-      writeLine,
       "structured live metadata identified multiple Root Skills",
     );
   }
@@ -481,13 +479,11 @@ async function resolveRootSkillAttribution(
   const mentionedNames = historicalSkillMentions(observation.events);
   if (mentionedNames.length === 0) {
     return unresolvedAttribution(
-      writeLine,
       "replayed prompt text did not identify a Root Skill candidate",
     );
   }
   if (mentionedNames.length > 1 || observation.cwd === null) {
     return unresolvedAttribution(
-      writeLine,
       mentionedNames.length > 1
         ? `replayed prompt text mentioned multiple skills: ${mentionedNames.join(", ")}`
         : "the historical thread working directory is unavailable",
@@ -496,7 +492,7 @@ async function resolveRootSkillAttribution(
 
   const mentionedName = mentionedNames[0];
   if (mentionedName === undefined) {
-    return unresolvedAttribution(writeLine, "no Root Skill candidate was found");
+    return unresolvedAttribution("no Root Skill candidate was found");
   }
   const response = await client.request<SkillsListResponse>("skills/list", {
     cwds: [observation.cwd],
@@ -511,7 +507,6 @@ async function resolveRootSkillAttribution(
   const candidate = matchingSkills[0];
   if (matchingSkills.length !== 1 || candidate === undefined) {
     return unresolvedAttribution(
-      writeLine,
       `historical mention ${JSON.stringify(`$${mentionedName}`)} did not resolve to exactly one enabled skill`,
     );
   }
@@ -521,7 +516,6 @@ async function resolveRootSkillAttribution(
   );
   if (!(await confirmHistoricalRootSkill(candidate))) {
     return unresolvedAttribution(
-      writeLine,
       `developer rejected historical candidate ${JSON.stringify(candidate.name)}`,
     );
   }
@@ -529,13 +523,8 @@ async function resolveRootSkillAttribution(
 }
 
 function unresolvedAttribution(
-  writeLine: (line: string) => void,
   reason: string,
 ): SkillAttribution {
-  writeLine(`Root Skill Attribution unresolved: ${reason}.`);
-  writeLine(
-    "Conformance evaluation is unavailable because Root Skill Attribution is unresolved; Trace collection was not affected.",
-  );
   return { kind: "unresolved", reason };
 }
 

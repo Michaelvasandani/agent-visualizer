@@ -1,5 +1,6 @@
 import { renderTraceEvent, type NormalizedEvent } from "./trace-event.js";
 import type { TerminalOutcome, TraceGap } from "./trace-observation.js";
+import type { SkillAttribution } from "./skill-contract.js";
 
 export function projectTraceEvents(
   events: readonly NormalizedEvent[],
@@ -37,4 +38,21 @@ export function renderTraceIntegrity(
         `sources=${gap.sources.join(",")}; reason=${gap.reason}.`,
     );
   }
+}
+
+export function renderSkillAttribution(
+  attribution: SkillAttribution,
+  writeLine: (line: string) => void,
+): void {
+  if (attribution.kind === "unresolved") {
+    writeLine(`Root Skill Attribution unresolved: ${attribution.reason}.`);
+    writeLine(
+      "Conformance evaluation is unavailable because Root Skill Attribution is unresolved; Trace collection was not affected.",
+    );
+    return;
+  }
+  const { rootSkill } = attribution;
+  writeLine(
+    `Root Skill Attribution: ${attribution.kind} name=${JSON.stringify(rootSkill.name)} path=${rootSkill.path}`,
+  );
 }
