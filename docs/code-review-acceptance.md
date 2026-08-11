@@ -109,7 +109,11 @@ If a descendant history cannot be resumed, Trace integrity records that the
 descendant source could not be reconstructed. A partial descendant
 `itemsView` also marks the Trace incomplete. If live child Events already
 establish that source's sequence, the Tracer preserves their causal order and
-does not append older resumed history after them.
+does not append older resumed history after them. A child whose start is
+observed live after attachment is complete without history replay; other child
+gaps are scoped only to the affected source. Root notifications stop being
+accepted as soon as the observed turn terminates, before descendant replay, so
+a later root turn cannot contaminate the finished Skill Run.
 
 ## Codex 0.145.0 limitations
 
@@ -195,4 +199,6 @@ one typed helper to materialize captured Evaluation Run envelopes.
 The final trace-integrity regressions cover partial child histories and the
 live/history race explicitly. Mandatory wording after an example marker still
 makes the referenced Markdown required; example markers that follow a general
-requirement remain optional examples.
+requirement remain optional examples. Each reference is classified from the
+wording that precedes that reference, so a later optional example cannot weaken
+an earlier required reference in the same sentence.

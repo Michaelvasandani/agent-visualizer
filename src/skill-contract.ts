@@ -306,12 +306,16 @@ function referenceIsOptional(
   ) {
     return true;
   }
+  const referencePrefix = markdown.slice(
+    referenceClauseStart(markdown, index),
+    index,
+  );
   const exampleIndex = lastMatchIndex(
-    clause,
+    referencePrefix,
     /\b(?:such as|for example|e\.g\.)\b/gi,
   );
   const requirementIndex = lastMatchIndex(
-    clause,
+    referencePrefix,
     /\b(?:must|shall|required|mandatory)\b/gi,
   );
   return exampleIndex >= 0 && requirementIndex < exampleIndex;
@@ -324,13 +328,7 @@ function lastMatchIndex(value: string, pattern: RegExp): number {
 }
 
 function referenceClause(markdown: string, index: number): string {
-  let start = 0;
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    if (isClauseBoundary(markdown, cursor)) {
-      start = cursor + 1;
-      break;
-    }
-  }
+  const start = referenceClauseStart(markdown, index);
   let end = markdown.length;
   for (let cursor = index; cursor < markdown.length; cursor += 1) {
     if (isClauseBoundary(markdown, cursor)) {
@@ -339,6 +337,15 @@ function referenceClause(markdown: string, index: number): string {
     }
   }
   return markdown.slice(start, end);
+}
+
+function referenceClauseStart(markdown: string, index: number): number {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    if (isClauseBoundary(markdown, cursor)) {
+      return cursor + 1;
+    }
+  }
+  return 0;
 }
 
 function isClauseBoundary(markdown: string, index: number): boolean {

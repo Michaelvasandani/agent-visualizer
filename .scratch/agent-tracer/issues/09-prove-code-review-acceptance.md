@@ -43,3 +43,7 @@
   the Trace incomplete and that older child history is never appended after
   live child Events have established the source sequence. Mandatory wording
   after an example marker cannot make a required Markdown reference optional.
+- Fully observed live descendants now remain complete, while partial or
+  unreconstructed child gaps affect only that child source. The Tracer stops
+  accepting root notifications at terminal outcome before descendant replay,
+  and mixed required/example references are classified independently.

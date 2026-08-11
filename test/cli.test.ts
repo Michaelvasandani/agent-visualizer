@@ -1345,6 +1345,20 @@ test("marks partial descendant history as an Incomplete Trace", async (t) => {
       ) {
         socket.send(
           JSON.stringify({
+            method: "item/completed",
+            params: {
+              threadId: "partial-parent",
+              turnId: "later-root-turn",
+              item: {
+                type: "agentMessage",
+                id: "later-root-message",
+                text: "must-not-contaminate-the-finished-skill-run",
+              },
+            },
+          }),
+        );
+        socket.send(
+          JSON.stringify({
             id: request.id,
             result: {
               thread: {
@@ -1383,7 +1397,12 @@ test("marks partial descendant history as an Incomplete Trace", async (t) => {
   assert.match(result.stdout, /source=partial-child.*available child summary/m);
   assert.match(
     result.stdout,
-    /Incomplete Trace:.*partial-child.*itemsView=summary/i,
+    /Incomplete Trace:.*sources=partial-child;.*itemsView=summary/i,
+  );
+  assert.doesNotMatch(result.stdout, /sources=partial-parent,partial-child/);
+  assert.doesNotMatch(
+    result.stdout,
+    /must-not-contaminate-the-finished-skill-run/,
   );
 });
 
@@ -3513,4 +3532,5 @@ test("renders complete reported activity with causal per-source sequencing", asy
   );
   assert.doesNotMatch(result.stdout, /inferred File Change/i);
   assert.doesNotMatch(result.stdout, /must-not-replay-after-live-child-events/);
+  assert.match(result.stdout, /Trace integrity: complete\./);
 });

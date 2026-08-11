@@ -131,3 +131,26 @@ test("does not classify an explicitly mandatory reference as an optional example
     /required Markdown reference.*docs\/agents\/required\.md/i,
   );
 });
+
+test("keeps a required reference mandatory when a later reference is an example", async () => {
+  const fixtureRoot = await mkdtemp(
+    path.join(tmpdir(), "agent-tracer-contract-"),
+  );
+  const workingDirectory = path.join(fixtureRoot, "repository");
+  const skillDirectory = path.join(fixtureRoot, "external-skill");
+  const skillPath = path.join(skillDirectory, "SKILL.md");
+  await mkdir(workingDirectory, { recursive: true });
+  await mkdir(skillDirectory, { recursive: true });
+  await writeFile(
+    skillPath,
+    "You must follow `docs/agents/required.md` and may consult examples such as `docs/agents/optional.md`.\n",
+  );
+
+  await assert.rejects(
+    constructSkillContract(
+      { name: "mixed-reference-requirements", path: skillPath },
+      workingDirectory,
+    ),
+    /required Markdown reference.*docs\/agents\/required\.md/i,
+  );
+});
