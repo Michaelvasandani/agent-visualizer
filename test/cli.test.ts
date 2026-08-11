@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -9,6 +9,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const cliPath = path.join(repositoryRoot, "src", "cli.ts");
+const tsxImport = import.meta.resolve("tsx");
 
 interface CliResult {
   readonly exitCode: number | null;
@@ -21,6 +22,7 @@ async function runCli(
   options: {
     readonly codexVersion: string;
     readonly codexBehavior?: string;
+    readonly cwd?: string;
     readonly stdin?: string;
   },
 ): Promise<CliResult> {
@@ -35,9 +37,9 @@ async function runCli(
   return await new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      ["--import", "tsx", cliPath, ...args],
+      ["--import", tsxImport, cliPath, ...args],
       {
-        cwd: repositoryRoot,
+        cwd: options.cwd ?? repositoryRoot,
         env: {
           ...process.env,
           PATH: `${binDirectory}${path.delimiter}${process.env.PATH ?? ""}`,
@@ -323,6 +325,9 @@ async function runConformanceValidationFixture(options: {
   readonly status?: "completed" | "failed" | "interrupted";
   readonly itemsView?: "summary";
   readonly findings?: readonly Record<string, unknown>[];
+  readonly cwd?: string;
+  readonly traceArgs?: readonly string[];
+  readonly sensitivePayload?: Record<string, unknown>;
 }): Promise<CliResult> {
   const skillPath = path.join(
     repositoryRoot,
@@ -389,6 +394,18 @@ async function runConformanceValidationFixture(options: {
             },
           }),
         );
+        if (options.sensitivePayload !== undefined) {
+          socket.send(
+            JSON.stringify({
+              method: "thread/futureActivity",
+              params: {
+                threadId: "validation-observed-thread",
+                turnId: "validation-observed-turn",
+                ...options.sensitivePayload,
+              },
+            }),
+          );
+        }
         if (options.itemsView !== "summary") {
           setImmediate(() => {
             socket.send(
@@ -428,13 +445,191 @@ async function runConformanceValidationFixture(options: {
   try {
     const address = server.address() as AddressInfo;
     return await runCli(
-      ["trace", "--server", `ws://127.0.0.1:${address.port}`],
-      { codexVersion: "codex-cli 0.145.0" },
+      [
+        "trace",
+        "--server",
+        `ws://127.0.0.1:${address.port}`,
+        ...(options.traceArgs ?? []),
+      ],
+      {
+        codexVersion: "codex-cli 0.145.0",
+        ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+      },
     );
   } finally {
     server.close();
   }
 }
+
+test("keeps Trace data in memory unless export is explicitly requested", async () => {
+  const workingDirectory = await mkdtemp(
+    path.join(tmpdir(), "agent-tracer-memory-only-"),
+  );
+
+  const result = await runConformanceValidationFixture({
+    cwd: workingDirectory,
+  });
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.deepEqual(await readdir(workingDirectory), []);
+});
+
+test("explicitly exports one versioned, self-contained, unredacted Saved Trace", async () => {
+  const workingDirectory = await mkdtemp(
+    path.join(tmpdir(), "agent-tracer-export-"),
+  );
+  const savedTracePath = path.join(workingDirectory, "audit.json");
+  const sensitivePayload = {
+    protocolSecret: "saved-secret-atlas",
+    nested: { exact: ["alpha", 42, true, null] },
+  };
+
+  const result = await runConformanceValidationFixture({
+    traceArgs: ["--export", savedTracePath],
+    sensitivePayload,
+  });
+  const savedText = await readFile(savedTracePath, "utf8").catch(() => null);
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.notEqual(savedText, null, "explicit export should write the requested file");
+  const saved = JSON.parse(savedText ?? "null") as Record<string, unknown>;
+  assert.equal(saved.schemaVersion, 1);
+  assert.deepEqual(Object.keys(saved).sort(), [
+    "events",
+    "findings",
+    "obligations",
+    "protocolCompatibility",
+    "run",
+    "schemaVersion",
+    "skillAttribution",
+    "skillContract",
+    "terminalOutcome",
+    "traceIntegrity",
+  ]);
+  assert.deepEqual(saved.protocolCompatibility, {
+    codexCli: "0.145.0",
+    codexAppServer: "0.145.0",
+  });
+  assert.deepEqual(saved.run, {
+    threadId: "validation-observed-thread",
+    cwd: null,
+  });
+  assert.deepEqual(saved.terminalOutcome, { kind: "completed" });
+  assert.deepEqual(saved.traceIntegrity, { complete: true, gaps: [] });
+  assert.deepEqual(saved.skillAttribution, {
+    kind: "exact",
+    rootSkill: {
+      name: "conformance-fixture",
+      path: path.join(
+        repositoryRoot,
+        "test",
+        "fixtures",
+        "skills",
+        "conformance-fixture",
+        "SKILL.md",
+      ),
+    },
+  });
+  assert.ok(saved.skillContract);
+  assert.equal((saved.obligations as readonly unknown[]).length, 5);
+  assert.equal((saved.findings as readonly unknown[]).length, 4);
+  const events = saved.events as readonly Record<string, unknown>[];
+  assert.ok(events.length >= 3);
+  assert.deepEqual(
+    events.find(
+      (event) =>
+        (event.payload as Record<string, unknown>).protocolSecret ===
+        "saved-secret-atlas",
+    )?.payload,
+    {
+      threadId: "validation-observed-thread",
+      turnId: "validation-observed-turn",
+      ...sensitivePayload,
+    },
+  );
+  assert.ok(
+    events.every(
+      (event) =>
+        typeof event.id === "string" &&
+        typeof event.sourceId === "string" &&
+        typeof event.sourceSequence === "number" &&
+        "causalParentId" in event &&
+        "sourceParentId" in event &&
+        typeof event.sourceDepth === "number",
+    ),
+  );
+  assert.match(
+    result.stdout,
+    /WARNING: SAVED TRACE CONTAINS UNREDACTED SENSITIVE INFORMATION/i,
+  );
+  assert.ok(
+    result.stdout.indexOf("WARNING: SAVED TRACE") <
+      result.stdout.indexOf(`Saved Trace exported to ${savedTracePath}`),
+    result.stdout,
+  );
+});
+
+test("loads a Saved Trace through the same terminal Event projection", async () => {
+  const workingDirectory = await mkdtemp(
+    path.join(tmpdir(), "agent-tracer-round-trip-"),
+  );
+  const savedTracePath = path.join(workingDirectory, "round-trip.json");
+  const observed = await runConformanceValidationFixture({
+    traceArgs: ["--export", savedTracePath],
+    sensitivePayload: {
+      protocolSecret: "round-trip-secret-atlas",
+      nested: { preserved: ["one", 2, false, null] },
+    },
+  });
+
+  const replayed = await runCli(["replay", "--file", savedTracePath], {
+    codexVersion: "codex-cli 9.999.0",
+  });
+
+  assert.equal(observed.exitCode, 0, observed.stderr);
+  assert.equal(replayed.exitCode, 0, replayed.stderr);
+  const eventLines = (output: string): readonly string[] =>
+    output
+      .split("\n")
+      .filter((line) => /^\s*\[[a-z-]+\].* event=/.test(line));
+  assert.deepEqual(eventLines(replayed.stdout), eventLines(observed.stdout));
+  assert.match(replayed.stdout, /round-trip-secret-atlas/);
+  assert.match(
+    replayed.stdout,
+    /WARNING: SAVED TRACE CONTAINS UNREDACTED SENSITIVE INFORMATION/i,
+  );
+  assert.match(replayed.stdout, /Skill Run terminal outcome: completed/);
+  assert.match(replayed.stdout, /Trace integrity: complete/);
+  assert.match(replayed.stdout, /Root Skill Attribution: exact/);
+  assert.match(replayed.stdout, /\[Skill Contract\]/);
+  assert.match(replayed.stdout, /\[Obligation obligation-1\]/);
+  assert.match(replayed.stdout, /\[Finding obligation-1\]/);
+});
+
+test("rejects an unsupported Saved Trace schema version", async () => {
+  const workingDirectory = await mkdtemp(
+    path.join(tmpdir(), "agent-tracer-schema-version-"),
+  );
+  const savedTracePath = path.join(workingDirectory, "future.json");
+  const observed = await runConformanceValidationFixture({
+    traceArgs: ["--export", savedTracePath],
+  });
+  const saved = JSON.parse(
+    await readFile(savedTracePath, "utf8"),
+  ) as Record<string, unknown>;
+  await writeFile(
+    savedTracePath,
+    JSON.stringify({ ...saved, schemaVersion: 2 }),
+  );
+
+  const replayed = await runCli(["replay", "--file", savedTracePath], {
+    codexVersion: "codex-cli 0.145.0",
+  });
+
+  assert.equal(observed.exitCode, 0, observed.stderr);
+  assert.equal(replayed.exitCode, 1);
+  assert.match(replayed.stderr, /Saved Trace schema version must be 1/i);
+});
 
 test("rejects an unsupported Codex version before observation", async () => {
   const result = await runCli(["trace", "--server", "ws://127.0.0.1:1"], {

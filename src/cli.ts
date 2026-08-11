@@ -4,23 +4,34 @@ import { createInterface } from "node:readline/promises";
 
 import { requireSupportedCodexVersion } from "./codex-version.js";
 import { traceLoadedThread } from "./live-trace.js";
+import { replaySavedTrace } from "./saved-trace.js";
 import { runForegroundSharedServer } from "./shared-server.js";
 
 async function main(args: readonly string[]): Promise<void> {
   const command = args[0];
-  if (command !== "trace" && command !== "server") {
-    throw new Error("Usage: agent-tracer <server|trace>");
+  if (command !== "trace" && command !== "server" && command !== "replay") {
+    throw new Error("Usage: agent-tracer <server|trace|replay>");
+  }
+
+  if (command === "replay") {
+    const inputPath = readOption(args.slice(1), "--file");
+    await replaySavedTrace(inputPath, (line) =>
+      process.stdout.write(`${line}\n`),
+    );
+    return;
   }
 
   await requireSupportedCodexVersion();
 
   if (command === "trace") {
     const serverUrl = readOption(args.slice(1), "--server");
+    const exportPath = readOptionalOption(args.slice(1), "--export");
     await traceLoadedThread(
       serverUrl,
       (line) => process.stdout.write(`${line}\n`),
       promptForLoadedThread,
       promptForHistoricalRootSkill,
+      exportPath,
     );
     return;
   }

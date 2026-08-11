@@ -1,19 +1,37 @@
 import { AppServerClient } from "./app-server-client.js";
-import { evaluateConformance, renderFindings } from "./conformance.js";
-import { compileObligations, renderObligations } from "./obligation.js";
+import {
+  evaluateConformance,
+  renderFindings,
+  type Finding,
+} from "./conformance.js";
+import {
+  compileObligations,
+  renderObligations,
+  type Obligation,
+} from "./obligation.js";
+import {
+  exportSavedTrace,
+  SAVED_TRACE_SENSITIVE_DATA_WARNING,
+  type SkillAttribution,
+} from "./saved-trace.js";
 import {
   constructSkillContract,
   renderSkillContract,
   type RootSkillSelection,
+  type SkillContract,
 } from "./skill-contract.js";
 import {
   createNormalizedEvent,
-  renderTraceEvent,
   type JsonObject,
   type NormalizedEvent,
   type TraceEventKind,
 } from "./trace-event.js";
 import type { TerminalOutcome, TraceGap } from "./trace-observation.js";
+import {
+  projectTraceEvents,
+  renderTerminalOutcome,
+  renderTraceIntegrity,
+} from "./trace-projection.js";
 
 interface LoadedThreadsResponse {
   readonly data: readonly string[];
@@ -75,11 +93,6 @@ interface RecoveryCheckpoint {
   readonly sourceIds: readonly string[];
 }
 
-interface ResolvedAttribution {
-  readonly kind: "exact" | "confirmed";
-  readonly rootSkill: RootSkillSelection;
-}
-
 const SENSITIVE_DATA_WARNING =
   "WARNING: THIS LIVE TRACE CONTAINS UNREDACTED SENSITIVE INFORMATION. " +
   "Prompts, credentials, paths, proprietary content, and personal data may be " +
@@ -94,6 +107,7 @@ export async function traceLoadedThread(
   confirmHistoricalRootSkill: (
     rootSkill: RootSkillSelection,
   ) => Promise<boolean> = rejectHistoricalRootSkill,
+  exportPath?: string,
 ): Promise<void> {
   writeLine(SENSITIVE_DATA_WARNING);
   let client = await AppServerClient.connect(serverUrl);
@@ -114,22 +128,25 @@ export async function traceLoadedThread(
     client = observation.client;
     renderTerminalOutcome(observation.terminalOutcome, writeLine);
     renderTraceIntegrity(observation.gaps, writeLine);
-    const attribution = await resolveRootSkillAttribution(
+    const skillAttribution = await resolveRootSkillAttribution(
       client,
       observation,
       writeLine,
       confirmHistoricalRootSkill,
     );
-    if (attribution !== null) {
-      const { rootSkill } = attribution;
+    let skillContract: SkillContract | null = null;
+    let obligations: readonly Obligation[] = Object.freeze([]);
+    let findings: readonly Finding[] = Object.freeze([]);
+    if (skillAttribution.kind !== "unresolved") {
+      const { rootSkill } = skillAttribution;
       writeLine(
-        `Root Skill Attribution: ${attribution.kind} name=${JSON.stringify(rootSkill.name)} path=${rootSkill.path}`,
+        `Root Skill Attribution: ${skillAttribution.kind} name=${JSON.stringify(rootSkill.name)} path=${rootSkill.path}`,
       );
-      const contract = await constructSkillContract(rootSkill);
-      for (const line of renderSkillContract(contract)) writeLine(line);
-      const obligations = await compileObligations(client, contract);
+      skillContract = await constructSkillContract(rootSkill);
+      for (const line of renderSkillContract(skillContract)) writeLine(line);
+      obligations = await compileObligations(client, skillContract);
       for (const line of renderObligations(obligations)) writeLine(line);
-      const findings = await evaluateConformance(client, {
+      findings = await evaluateConformance(client, {
         rootSkillPath: rootSkill.path,
         obligations,
         events: observation.events,
@@ -137,6 +154,23 @@ export async function traceLoadedThread(
         terminalOutcome: observation.terminalOutcome,
       });
       for (const line of renderFindings(findings)) writeLine(line);
+    }
+    if (exportPath !== undefined) {
+      writeLine(SAVED_TRACE_SENSITIVE_DATA_WARNING);
+      await exportSavedTrace(exportPath, {
+        run: { threadId, cwd: observation.cwd },
+        terminalOutcome: observation.terminalOutcome,
+        traceIntegrity: {
+          complete: observation.gaps.length === 0,
+          gaps: observation.gaps,
+        },
+        skillAttribution,
+        skillContract,
+        obligations,
+        events: observation.events,
+        findings,
+      });
+      writeLine(`Saved Trace exported to ${exportPath}`);
     }
     await client.request("thread/unsubscribe", { threadId });
   } finally {
@@ -418,34 +452,6 @@ function terminalOutcome(status: string | undefined, error: unknown): TerminalOu
   return null;
 }
 
-function renderTerminalOutcome(
-  outcome: TerminalOutcome,
-  writeLine: (line: string) => void,
-): void {
-  const failure = outcome.kind === "failed" ? ` error=${JSON.stringify(outcome.error)}` : "";
-  writeLine(`Skill Run terminal outcome: ${outcome.kind}${failure}`);
-}
-
-function renderTraceIntegrity(
-  gaps: readonly TraceGap[],
-  writeLine: (line: string) => void,
-): void {
-  if (gaps.length === 0) {
-    writeLine("Trace integrity: complete.");
-    return;
-  }
-  for (const gap of gaps) {
-    const intervalStart =
-      gap.afterEventId === null
-        ? "observation start"
-        : `after ${gap.afterEventId}`;
-    writeLine(
-      `Incomplete Trace: interval=${intervalStart} through ${gap.historyBoundary}; ` +
-        `sources=${gap.sources.join(",")}; reason=${gap.reason}.`,
-    );
-  }
-}
-
 async function resolveRootSkillAttribution(
   client: AppServerClient,
   observation: ThreadObservation,
@@ -453,7 +459,7 @@ async function resolveRootSkillAttribution(
   confirmHistoricalRootSkill: (
     rootSkill: RootSkillSelection,
   ) => Promise<boolean>,
-): Promise<ResolvedAttribution | null> {
+): Promise<SkillAttribution> {
   const exactSelections = uniqueRootSkills(
     observation.events.flatMap((event) =>
       event.observationSources.includes("live")
@@ -525,12 +531,12 @@ async function resolveRootSkillAttribution(
 function unresolvedAttribution(
   writeLine: (line: string) => void,
   reason: string,
-): null {
+): SkillAttribution {
   writeLine(`Root Skill Attribution unresolved: ${reason}.`);
   writeLine(
     "Conformance evaluation is unavailable because Root Skill Attribution is unresolved; Trace collection was not affected.",
   );
-  return null;
+  return { kind: "unresolved", reason };
 }
 
 function historicalSkillMentions(
@@ -810,7 +816,7 @@ class EventPipeline {
       payload: params,
     });
     this.#events.push(event);
-    this.#writeLine(renderTraceEvent(event));
+    projectTraceEvents([event], this.#writeLine);
     this.#registerDescendantSource(event);
   }
 

@@ -38,6 +38,24 @@ Attach the Tracer from a third terminal:
 npm start -- trace --server ws://127.0.0.1:4500
 ```
 
+Trace data remains in memory unless export is explicitly requested. To write a
+self-contained Saved Trace after Conformance evaluation finishes, provide one
+output path:
+
+```sh
+npm start -- trace --server ws://127.0.0.1:4500 --export ./audit.json
+```
+
+The CLI repeats the unredacted-sensitive-data warning immediately before it
+writes the versioned JSON bundle. Existing files are not overwritten.
+
+Replay a Saved Trace offline through the same terminal Event projection used by
+live observation:
+
+```sh
+npm start -- replay --file ./audit.json
+```
+
 The Tracer initializes and lists loaded threads. It selects a sole loaded thread
 automatically; when several are loaded, it displays every thread ID and waits
 for an explicit numbered selection. It never guesses from recency.
@@ -73,10 +91,11 @@ It reads those files as text without running referenced code, follows each file
 once with cycle deduplication, and retains behavioral instruction blocks
 while excluding contextual prose and final-result quality from the contract.
 
-The Live Trace is deliberately unredacted. Prompts, credentials, paths,
-proprietary content, personal data, and future evaluation inputs may appear in
-terminal output. Future Evaluation Runs will send the unredacted Skill Contract
-and Trace to OpenAI. This slice does not persist Trace data.
+The Live Trace and Saved Trace are deliberately unredacted. Prompts,
+credentials, paths, proprietary content, personal data, and evaluation inputs
+may appear in terminal output or an explicitly exported JSON bundle. Evaluation
+Runs send the unredacted Skill Contract and Trace to OpenAI. Without `--export`,
+the Tracer does not persist Trace data.
 
 ## Development
 
