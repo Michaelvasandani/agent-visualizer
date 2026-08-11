@@ -1131,3 +1131,274 @@ test("keeps tracing but blocks Conformance when historical skill mentions are un
     ],
   );
 });
+
+test("renders complete reported activity with causal per-source sequencing", async (t) => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+
+  server.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["thread-parent"], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { thread: { id: "thread-parent", turns: [] } },
+          }),
+        );
+        setImmediate(() => {
+          for (const notification of [
+            {
+              method: "agent/futureActivity",
+              params: {
+                threadId: "thread-child",
+                turnId: "turn-child",
+                experimentalSecret: "child-unknown-secret",
+              },
+            },
+            {
+              method: "item/commandExecution/outputDelta",
+              params: {
+                threadId: "thread-parent",
+                turnId: "turn-parent",
+                itemId: "command-one",
+                delta: "streamed command output\n",
+              },
+            },
+            {
+              method: "item/commandExecution/terminalInteraction",
+              params: {
+                threadId: "thread-parent",
+                turnId: "turn-parent",
+                itemId: "command-one",
+                processId: "process-one",
+                stdin: "yes\n",
+              },
+            },
+            {
+              method: "item/completed",
+              params: {
+                threadId: "thread-parent",
+                turnId: "turn-parent",
+                completedAtMs: 140,
+                item: {
+                  type: "commandExecution",
+                  id: "command-one",
+                  command: "npm test",
+                  cwd: "/workspace/private",
+                  status: "completed",
+                  aggregatedOutput: "all green\n",
+                  exitCode: 0,
+                  durationMs: 40,
+                },
+              },
+            },
+            {
+              method: "item/completed",
+              params: {
+                threadId: "thread-parent",
+                turnId: "turn-parent",
+                completedAtMs: 150,
+                item: {
+                  type: "fileChange",
+                  id: "change-one",
+                  status: "completed",
+                  changes: [
+                    {
+                      path: "src/example.ts",
+                      kind: "update",
+                      diff: "@@ -1 +1 @@\n-old\n+new",
+                    },
+                  ],
+                },
+              },
+            },
+            {
+              method: "item/started",
+              params: {
+                threadId: "thread-parent",
+                turnId: "turn-parent",
+                startedAtMs: 160,
+                item: {
+                  type: "collabAgentToolCall",
+                  id: "spawn-one",
+                  tool: "spawnAgent",
+                  status: "inProgress",
+                  senderThreadId: "thread-parent",
+                  receiverThreadIds: ["thread-child"],
+                  prompt: "inspect the private fixture",
+                },
+              },
+            },
+            {
+              method: "item/completed",
+              params: {
+                threadId: "thread-child",
+                turnId: "turn-child",
+                completedAtMs: 205,
+                item: {
+                  type: "mcpToolCall",
+                  id: "tool-child",
+                  server: "example",
+                  tool: "lookup",
+                  status: "completed",
+                  arguments: { query: "private child query" },
+                  result: { content: [{ type: "text", text: "child result" }] },
+                  durationMs: 25,
+                },
+              },
+            },
+            {
+              method: "item/mcpToolCall/progress",
+              params: {
+                threadId: "thread-child",
+                turnId: "turn-child",
+                itemId: "tool-child",
+                message: "child tool halfway",
+              },
+            },
+            {
+              method: "item/completed",
+              params: {
+                threadId: "thread-parent",
+                turnId: "turn-parent",
+                item: {
+                  type: "subAgentActivity",
+                  id: "child-activity-one",
+                  kind: "completed",
+                  agentThreadId: "thread-child",
+                  agentPath: "parent/child",
+                },
+              },
+            },
+            {
+              method: "thread/tokenUsage/updated",
+              params: {
+                threadId: "thread-child",
+                turnId: "turn-child",
+                tokenUsage: {
+                  last: { inputTokens: 13, outputTokens: 8 },
+                  total: { inputTokens: 21, outputTokens: 13 },
+                },
+              },
+            },
+            {
+              method: "thread/tokenUsage/updated",
+              params: {
+                threadId: "thread-parent",
+                turnId: "turn-parent",
+                tokenUsage: {
+                  last: { inputTokens: 34, outputTokens: 21 },
+                  total: { inputTokens: 55, outputTokens: 34 },
+                },
+              },
+            },
+            {
+              method: "thread/futureActivity",
+              params: {
+                threadId: "thread-parent",
+                turnId: "turn-parent",
+                protocolSecret: "parent-unknown-secret",
+              },
+            },
+            {
+              method: "turn/completed",
+              params: {
+                threadId: "thread-parent",
+                turn: {
+                  id: "turn-parent",
+                  status: "completed",
+                  items: [],
+                  startedAt: 1700000000,
+                  completedAt: 1700000002,
+                  durationMs: 2000,
+                },
+              },
+            },
+          ]) {
+            socket.send(JSON.stringify(notification));
+          }
+        });
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+  const result = await runCli(
+    ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+    { codexVersion: "codex-cli 0.145.0" },
+  );
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(result.stdout, /line position.*not a total order/i);
+  assert.match(
+    result.stdout,
+    /^\[command\] item\/commandExecution\/outputDelta.*source=thread-parent sequence=1.*parent=thread-parent\/turn-parent\/command-one.*streamed command output/m,
+  );
+  assert.match(
+    result.stdout,
+    /^\[command\] item\/commandExecution\/terminalInteraction.*source=thread-parent sequence=2.*parent=thread-parent\/turn-parent\/command-one.*"processId":"process-one".*"stdin":"yes\\n"/m,
+  );
+  assert.match(
+    result.stdout,
+    /^\[command\] item\/completed.*source=thread-parent sequence=3.*timing=.*"completedAtMs":140.*"durationMs":40.*"command":"npm test".*"cwd":"\/workspace\/private".*"aggregatedOutput":"all green\\n".*"exitCode":0/m,
+  );
+  assert.match(
+    result.stdout,
+    /^\[file-change\].*source=thread-parent sequence=4.*"path":"src\/example.ts".*"diff":"@@ -1 \+1 @@\\n-old\\n\+new"/m,
+  );
+  assert.match(
+    result.stdout,
+    /^\[collaboration\].*source=thread-parent sequence=5.*"tool":"spawnAgent".*"receiverThreadIds":\["thread-child"\].*inspect the private fixture/m,
+  );
+  assert.match(
+    result.stdout,
+    /^  \[unknown\].*source=thread-child sequence=1.*causedBy=thread-parent\/turn-parent\/spawn-one\/started.*sourceType=agent\/futureActivity.*child-unknown-secret/m,
+  );
+  assert.match(
+    result.stdout,
+    /^  \[tool\].*source=thread-child sequence=2.*causedBy=thread-parent\/turn-parent\/spawn-one\/started.*timing=.*"completedAtMs":205.*"durationMs":25.*private child query.*child result/m,
+  );
+  assert.match(
+    result.stdout,
+    /^  \[tool\] item\/mcpToolCall\/progress.*source=thread-child sequence=3.*parent=thread-child\/turn-child\/tool-child.*child tool halfway/m,
+  );
+  assert.match(
+    result.stdout,
+    /^  \[resource\].*source=thread-child sequence=4.*"inputTokens":13.*"outputTokens":8/m,
+  );
+  assert.match(
+    result.stdout,
+    /^\[collaboration\] item\/completed.*source=thread-parent sequence=6.*"type":"subAgentActivity".*"agentThreadId":"thread-child".*"agentPath":"parent\/child"/m,
+  );
+  assert.match(
+    result.stdout,
+    /^\[resource\].*source=thread-parent sequence=7.*"inputTokens":34.*"outputTokens":21/m,
+  );
+  assert.match(
+    result.stdout,
+    /^\[unknown\].*source=thread-parent sequence=8.*sourceType=thread\/futureActivity.*parent-unknown-secret/m,
+  );
+  assert.match(
+    result.stdout,
+    /^\[turn\].*source=thread-parent sequence=9.*timing=.*"startedAt":1700000000.*"completedAt":1700000002.*"durationMs":2000/m,
+  );
+  assert.doesNotMatch(result.stdout, /inferred File Change/i);
+});

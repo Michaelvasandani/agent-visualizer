@@ -4,8 +4,13 @@ import {
   renderSkillContract,
   type RootSkillSelection,
 } from "./skill-contract.js";
-
-type JsonObject = Record<string, unknown>;
+import {
+  createNormalizedEvent,
+  renderTraceEvent,
+  type JsonObject,
+  type NormalizedEvent,
+  type TraceEventKind,
+} from "./trace-event.js";
 
 interface LoadedThreadsResponse {
   readonly data: readonly string[];
@@ -38,17 +43,6 @@ interface HistoryTurn {
   readonly status?: string;
 }
 
-interface TraceEvent {
-  readonly id: string;
-  readonly sourceId: string;
-  readonly sourceSequence: number;
-  readonly causalParentId: string;
-  readonly method: string;
-  readonly kind: string;
-  readonly observationSources: readonly ("history" | "live")[];
-  readonly payload: JsonObject;
-}
-
 type LifecycleMethod = "item/started" | "item/completed";
 
 interface IndexedNotification {
@@ -65,7 +59,7 @@ interface ReplayCandidate {
 
 interface ThreadObservation {
   readonly cwd: string | null;
-  readonly events: readonly TraceEvent[];
+  readonly events: readonly NormalizedEvent[];
 }
 
 interface ResolvedAttribution {
@@ -94,6 +88,9 @@ export async function traceLoadedThread(
   try {
     const threadIds = await listAllLoadedThreads(client);
     const threadId = await chooseLoadedThread(threadIds, writeLine, selectThread);
+    writeLine(
+      "Live Trace note: per-source sequence and causal links are authoritative; append-only line position is not a total order across concurrent sources.",
+    );
 
     const observation = await observeResumedThread(
       client,
@@ -186,11 +183,13 @@ async function observeResumedThread(
 
   const processNotification = (notification: JsonObject): void => {
     const params = asObject(notification.params);
-    if (params?.threadId !== threadId) return;
+    if (params === null) return;
     const method = notification.method;
     if (typeof method !== "string") return;
     pipeline.append(method, params, ["live"]);
-    if (method === "turn/completed") resolveCompletion();
+    if (method === "turn/completed" && params.threadId === threadId) {
+      resolveCompletion();
+    }
   };
 
   const removeHandler = client.onNotification((notification) => {
@@ -310,7 +309,7 @@ function unresolvedAttribution(
 }
 
 function historicalSkillMentions(
-  events: readonly TraceEvent[],
+  events: readonly NormalizedEvent[],
 ): readonly string[] {
   const historicalUserEvents = events.filter(
     (event) =>
@@ -353,7 +352,7 @@ function addSkillMention(names: Set<string>, placeholder: string): void {
 }
 
 function structuredSkillSelections(
-  event: TraceEvent,
+  event: NormalizedEvent,
 ): readonly RootSkillSelection[] {
   if (event.method !== "item/started" && event.method !== "item/completed") {
     return [];
@@ -391,15 +390,28 @@ class EventPipeline {
   readonly #threadId: string;
   readonly #writeLine: (line: string) => void;
   readonly #seenEventIds = new Set<string>();
-  readonly #events: TraceEvent[] = [];
-  #nextSourceSequence = 1;
+  readonly #events: NormalizedEvent[] = [];
+  readonly #knownSourceIds: Set<string>;
+  readonly #sourceParents = new Map<string, string>();
+  readonly #sourceDepths = new Map<string, number>();
+  readonly #sourceSequences = new Map<string, number>();
+  readonly #pendingBySource = new Map<
+    string,
+    Array<{
+      readonly method: string;
+      readonly params: JsonObject;
+      readonly observationSources: readonly ("history" | "live")[];
+    }>
+  >();
 
   constructor(threadId: string, writeLine: (line: string) => void) {
     this.#threadId = threadId;
     this.#writeLine = writeLine;
+    this.#knownSourceIds = new Set([threadId]);
+    this.#sourceDepths.set(threadId, 0);
   }
 
-  events(): readonly TraceEvent[] {
+  events(): readonly NormalizedEvent[] {
     return Object.freeze([...this.#events]);
   }
 
@@ -503,32 +515,191 @@ class EventPipeline {
     params: JsonObject,
     observationSources: readonly ("history" | "live")[],
   ): void {
-    if (params.threadId !== this.#threadId) return;
-    const kind = traceKind(method, params);
-    if (kind === null) return;
+    const sourceId = notificationSourceId(params);
+    if (sourceId === null) return;
+    if (!this.#knownSourceIds.has(sourceId)) {
+      const pending = this.#pendingBySource.get(sourceId) ?? [];
+      pending.push({ method, params, observationSources });
+      this.#pendingBySource.set(sourceId, pending);
+      return;
+    }
+    this.#appendKnown(method, params, observationSources, sourceId);
+  }
 
+  #appendKnown(
+    method: string,
+    params: JsonObject,
+    observationSources: readonly ("history" | "live")[],
+    sourceId: string,
+  ): void {
+    const kind = traceKind(method, params);
     const item = asObject(params.item);
-    const itemId = item?.id;
-    const turnId = params.turnId;
-    if (typeof itemId !== "string" || typeof turnId !== "string") return;
-    const lifecycle = method === "item/started" ? "started" : "completed";
-    const eventId = `${this.#threadId}/${turnId}/${itemId}/${lifecycle}`;
+    const itemId =
+      typeof item?.id === "string"
+        ? item.id
+        : typeof params.itemId === "string"
+          ? params.itemId
+          : null;
+    const turn = asObject(params.turn);
+    const turnId =
+      typeof params.turnId === "string"
+        ? params.turnId
+        : typeof turn?.id === "string"
+          ? turn.id
+          : null;
+    const sourceSequence = (this.#sourceSequences.get(sourceId) ?? 0) + 1;
+    const eventId = eventIdentity(
+      sourceId,
+      sourceSequence,
+      method,
+      turnId,
+      itemId,
+    );
     if (this.#seenEventIds.has(eventId)) return;
     this.#seenEventIds.add(eventId);
+    this.#sourceSequences.set(sourceId, sourceSequence);
 
-    const event: TraceEvent = Object.freeze({
+    const sourceParentId = this.#sourceParents.get(sourceId) ?? null;
+    const event = createNormalizedEvent({
       id: eventId,
-      sourceId: this.#threadId,
-      sourceSequence: this.#nextSourceSequence++,
-      causalParentId: `${this.#threadId}/${turnId}`,
+      sourceId,
+      sourceSequence,
+      causalParentId: causalParentId(sourceId, turnId, itemId, method, sourceParentId),
+      sourceParentId,
+      sourceDepth: this.#sourceDepths.get(sourceId) ?? 0,
       method,
       kind,
-      observationSources: Object.freeze([...observationSources]),
+      timing: eventTiming(params, item),
+      observationSources,
       payload: params,
     });
     this.#events.push(event);
-    this.#writeLine(renderEvent(event));
+    this.#writeLine(renderTraceEvent(event));
+    this.#registerDescendantSource(event);
   }
+
+  #registerDescendantSource(event: NormalizedEvent): void {
+    const item = asObject(event.payload.item);
+    if (
+      item === null ||
+      (item.type !== "collabToolCall" && item.type !== "collabAgentToolCall")
+    ) {
+      return;
+    }
+    if (item.tool !== "spawnAgent" && item.tool !== "spawn_agent") return;
+    const reportedReceiverIds = Array.isArray(item.receiverThreadIds)
+      ? item.receiverThreadIds
+      : [];
+    for (const candidate of [
+      ...reportedReceiverIds,
+      item.newThreadId,
+      item.receiverThreadId,
+    ]) {
+      if (
+        typeof candidate !== "string" ||
+        candidate === event.sourceId ||
+        this.#knownSourceIds.has(candidate)
+      ) {
+        continue;
+      }
+      this.#knownSourceIds.add(candidate);
+      this.#sourceParents.set(candidate, event.id);
+      this.#sourceDepths.set(candidate, event.sourceDepth + 1);
+      const pending = this.#pendingBySource.get(candidate) ?? [];
+      this.#pendingBySource.delete(candidate);
+      for (const queued of pending) {
+        this.#appendKnown(
+          queued.method,
+          queued.params,
+          queued.observationSources,
+          candidate,
+        );
+      }
+    }
+  }
+}
+
+function notificationSourceId(params: JsonObject): string | null {
+  if (typeof params.threadId === "string") return params.threadId;
+  const thread = asObject(params.thread);
+  return typeof thread?.id === "string" ? thread.id : null;
+}
+
+function eventIdentity(
+  sourceId: string,
+  sourceSequence: number,
+  method: string,
+  turnId: string | null,
+  itemId: unknown,
+): string {
+  if (
+    (method === "item/started" || method === "item/completed") &&
+    turnId !== null &&
+    typeof itemId === "string"
+  ) {
+    const lifecycle = method === "item/started" ? "started" : "completed";
+    return `${sourceId}/${turnId}/${itemId}/${lifecycle}`;
+  }
+  if (
+    (method === "turn/started" || method === "turn/completed") &&
+    turnId !== null
+  ) {
+    const lifecycle = method === "turn/started" ? "started" : "completed";
+    return `${sourceId}/${turnId}/turn/${lifecycle}`;
+  }
+  return `${sourceId}/event/${sourceSequence}`;
+}
+
+function causalParentId(
+  sourceId: string,
+  turnId: string | null,
+  itemId: unknown,
+  method: string,
+  sourceParentId: string | null,
+): string | null {
+  if (turnId === null) return sourceParentId;
+  if (
+    method !== "item/started" &&
+    method !== "item/completed" &&
+    typeof itemId === "string"
+  ) {
+    return `${sourceId}/${turnId}/${itemId}`;
+  }
+  return `${sourceId}/${turnId}`;
+}
+
+function eventTiming(
+  params: JsonObject,
+  item: JsonObject | null,
+): {
+  readonly startedAt?: number;
+  readonly completedAt?: number;
+  readonly startedAtMs?: number;
+  readonly completedAtMs?: number;
+  readonly durationMs?: number;
+} | null {
+  const timing: {
+    startedAt?: number;
+    completedAt?: number;
+    startedAtMs?: number;
+    completedAtMs?: number;
+    durationMs?: number;
+  } = {};
+  const turn = asObject(params.turn);
+  if (typeof turn?.startedAt === "number") timing.startedAt = turn.startedAt;
+  if (typeof turn?.completedAt === "number") timing.completedAt = turn.completedAt;
+  if (typeof params.startedAtMs === "number") timing.startedAtMs = params.startedAtMs;
+  if (typeof params.completedAtMs === "number") {
+    timing.completedAtMs = params.completedAtMs;
+  }
+  const durationMs =
+    typeof params.durationMs === "number"
+      ? params.durationMs
+      : typeof item?.durationMs === "number"
+        ? item.durationMs
+        : turn?.durationMs;
+  if (typeof durationMs === "number") timing.durationMs = durationMs;
+  return Object.keys(timing).length === 0 ? null : timing;
 }
 
 function historyMethod(item: JsonObject): LifecycleMethod {
@@ -599,31 +770,68 @@ function latestTurnIsTerminal(turns: readonly HistoryTurn[]): boolean {
   return status === "completed" || status === "failed" || status === "interrupted";
 }
 
-function renderEvent(event: TraceEvent): string {
-  return (
-    `[${event.kind}] ${event.method} event=${event.id} ` +
-    `source=${event.sourceId} sequence=${event.sourceSequence} ` +
-    `parent=${event.causalParentId} ${JSON.stringify(event.payload)}`
-  );
-}
-
-function traceKind(method: string, params: JsonObject): string | null {
-  if (method !== "item/started" && method !== "item/completed") return null;
+function traceKind(method: string, params: JsonObject): TraceEventKind {
+  if (method === "error") return "error";
+  if (method === "thread/tokenUsage/updated") return "resource";
+  if (
+    method === "thread/started" ||
+    method === "thread/closed" ||
+    method === "thread/status/changed"
+  ) {
+    return "thread";
+  }
+  if (method === "turn/started" || method === "turn/completed") return "turn";
+  if (
+    method === "item/commandExecution/outputDelta" ||
+    method === "item/commandExecution/terminalInteraction"
+  ) {
+    return "command";
+  }
+  if (
+    method === "item/fileChange/patchUpdated" ||
+    method === "item/fileChange/outputDelta" ||
+    method === "turn/diff/updated"
+  ) {
+    return "file-change";
+  }
+  if (method === "item/agentMessage/delta") return "agent";
+  if (method === "item/plan/delta" || method === "turn/plan/updated") {
+    return "plan";
+  }
+  if (
+    method === "item/reasoning/summaryTextDelta" ||
+    method === "item/reasoning/summaryPartAdded" ||
+    method === "item/reasoning/textDelta"
+  ) {
+    return "reasoning";
+  }
+  if (method === "item/mcpToolCall/progress") return "tool";
+  if (method !== "item/started" && method !== "item/completed") {
+    return "unknown";
+  }
   const item = asObject(params.item);
   const itemType = item?.type;
   if (itemType === "userMessage") return "user";
+  if (itemType === "agentMessage") return "agent";
+  if (itemType === "reasoning") return "reasoning";
+  if (itemType === "plan") return "plan";
   if (itemType === "commandExecution") return "command";
+  if (itemType === "fileChange") return "file-change";
+  if (itemType === "collabToolCall" || itemType === "collabAgentToolCall") {
+    return "collaboration";
+  }
+  if (itemType === "subAgentActivity") return "collaboration";
+  if (itemType === "sleep") return "duration";
   if (
     itemType === "mcpToolCall" ||
     itemType === "dynamicToolCall" ||
-    itemType === "collabAgentToolCall" ||
     itemType === "webSearch" ||
     itemType === "imageView" ||
     itemType === "imageGeneration"
   ) {
     return "tool";
   }
-  return null;
+  return "unknown";
 }
 
 function asObject(value: unknown): JsonObject | null {
