@@ -85,3 +85,26 @@ test("rejects a missing required Markdown reference instead of silently weakenin
     /required Markdown reference.*docs\/agents\/misspelled\.md/i,
   );
 });
+
+test("does not let an optional example hide a required reference in a later clause", async () => {
+  const fixtureRoot = await mkdtemp(
+    path.join(tmpdir(), "agent-tracer-contract-"),
+  );
+  const workingDirectory = path.join(fixtureRoot, "repository");
+  const skillDirectory = path.join(fixtureRoot, "external-skill");
+  const skillPath = path.join(skillDirectory, "SKILL.md");
+  await mkdir(workingDirectory, { recursive: true });
+  await mkdir(skillDirectory, { recursive: true });
+  await writeFile(
+    skillPath,
+    "For example, run locally. You must follow `docs/agents/required.md`.\n",
+  );
+
+  await assert.rejects(
+    constructSkillContract(
+      { name: "external-skill", path: skillPath },
+      workingDirectory,
+    ),
+    /required Markdown reference.*docs\/agents\/required\.md/i,
+  );
+});

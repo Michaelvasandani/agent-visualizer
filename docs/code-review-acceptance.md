@@ -102,7 +102,11 @@ thread or one of its causally reported descendants. The deterministic
 black-box acceptance test additionally assigns recognizable Evaluation Run
 thread ids and asserts that none occur in the Saved Trace. It also verifies the
 Tracer sends no `turn/start`, `turn/steer`, or `turn/interrupt` request to the
-observed thread.
+observed thread. After the root turn terminates, the Tracer passively resumes
+causally reported descendant threads, replays their available item history as
+child-sourced Events, and unsubscribes from every successfully resumed source.
+If a descendant history cannot be resumed, Trace integrity records that the
+descendant source could not be reconstructed.
 
 ## Codex 0.145.0 limitations
 
@@ -180,4 +184,7 @@ sanitized Saved Trace, add sanitized `thread/resume` responses from both real
 reviewer children, drive Evaluation Run responses from file-backed protocol
 envelopes, reject unresolved required Markdown references while retaining
 explicitly optional examples, and centralize instruction-block and
-fault-fixture construction.
+fault-fixture construction. The amended black-box replay now serves and consumes
+both captured child histories, asserts their causal child-source Events in the
+export, scopes optional-reference wording to each reference's clause, and uses
+one typed helper to materialize captured Evaluation Run envelopes.

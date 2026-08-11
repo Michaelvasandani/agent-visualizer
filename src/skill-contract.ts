@@ -298,11 +298,44 @@ function referenceIsOptional(
   index: number | undefined,
 ): boolean {
   if (index === undefined) return false;
-  const lineStart = markdown.lastIndexOf("\n", index) + 1;
-  const lineEndCandidate = markdown.indexOf("\n", index);
-  const lineEnd = lineEndCandidate === -1 ? markdown.length : lineEndCandidate;
-  const line = markdown.slice(lineStart, lineEnd);
+  const clause = referenceClause(markdown, index);
   return /\b(?:such as|for example|e\.g\.|if (?:it is |they are )?(?:present|available)|when (?:it is |they are )?(?:present|available))\b/i.test(
-    line,
+    clause,
+  );
+}
+
+function referenceClause(markdown: string, index: number): string {
+  let start = 0;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    if (isClauseBoundary(markdown, cursor)) {
+      start = cursor + 1;
+      break;
+    }
+  }
+  let end = markdown.length;
+  for (let cursor = index; cursor < markdown.length; cursor += 1) {
+    if (isClauseBoundary(markdown, cursor)) {
+      end = cursor;
+      break;
+    }
+  }
+  return markdown.slice(start, end);
+}
+
+function isClauseBoundary(markdown: string, index: number): boolean {
+  const character = markdown[index];
+  if (
+    character === "\n" ||
+    character === ";" ||
+    character === "!" ||
+    character === "?"
+  ) {
+    return true;
+  }
+  if (character !== "." || !/\s/.test(markdown[index + 1] ?? "")) {
+    return false;
+  }
+  return (
+    markdown.slice(Math.max(0, index - 3), index + 1).toLowerCase() !== "e.g."
   );
 }

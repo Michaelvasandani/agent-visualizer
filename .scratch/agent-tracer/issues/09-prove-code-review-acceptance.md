@@ -34,3 +34,8 @@
   committed, required broken Markdown references fail contract construction,
   real child resume payloads and Evaluation envelopes are file-backed, and the
   duplicated fixture/block construction is centralized.
+- The amended acceptance replay now actually resumes both captured reviewer
+  threads and asserts their child-sourced Events. Optional dangling references
+  are decided per clause, so example wording cannot hide a required reference
+  elsewhere on the same line. Evaluation fixture envelopes share one typed
+  materialization helper.

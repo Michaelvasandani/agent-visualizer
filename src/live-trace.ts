@@ -86,6 +86,7 @@ interface ThreadObservation {
   readonly cwd: string | null;
   readonly events: readonly NormalizedEvent[];
   readonly gaps: readonly TraceGap[];
+  readonly subscribedThreadIds: readonly string[];
   readonly terminalOutcome: TerminalOutcome;
 }
 
@@ -174,7 +175,11 @@ export async function traceLoadedThread(
       });
       writeLine(`Saved Trace exported to ${exportPath}`);
     }
-    await client.request("thread/unsubscribe", { threadId });
+    for (const subscribedThreadId of observation.subscribedThreadIds) {
+      await client.request("thread/unsubscribe", {
+        threadId: subscribedThreadId,
+      });
+    }
   } finally {
     client.close();
   }
@@ -265,6 +270,7 @@ async function observeResumedThread(
       result.response.thread.turns,
       historyCheckpoint,
       isRecovery ? "reconnect history" : "initial history",
+      result.replayedHistorySourceIds,
     );
     gaps.push(...historyGaps);
     if (
@@ -283,6 +289,9 @@ async function observeResumedThread(
         cwd,
         events: pipeline.events(),
         gaps: Object.freeze([...gaps]),
+        subscribedThreadIds: Object.freeze([
+          ...result.replayedHistorySourceIds,
+        ]),
         terminalOutcome: result.terminalOutcome,
       });
     }
@@ -308,6 +317,7 @@ async function observeConnection(
   pipeline: EventPipeline,
 ): Promise<{
   readonly response: ThreadResumeResponse;
+  readonly replayedHistorySourceIds: ReadonlySet<string>;
   readonly terminalOutcome: TerminalOutcome | null;
 }> {
   const bufferedNotifications: JsonObject[] = [];
@@ -343,24 +353,52 @@ async function observeConnection(
       "thread/resume",
       { threadId },
     );
-    pipeline.replay(response.thread.turns, bufferedNotifications);
+    pipeline.replay(threadId, response.thread.turns, bufferedNotifications);
     replayingHistory = false;
     for (const notification of bufferedNotifications) {
       processNotification(notification);
     }
     const historicalOutcome = terminalOutcomeFromHistory(response.thread.turns);
-    const terminalOutcome = historicalOutcome ?? liveTerminalOutcome;
-    if (terminalOutcome !== null) return { response, terminalOutcome };
-
-    return {
-      response,
-      terminalOutcome: await Promise.race([
+    const terminalOutcome =
+      historicalOutcome ??
+      liveTerminalOutcome ??
+      (await Promise.race([
         completion,
         client.whenClosed().then(() => null),
-      ]),
-    };
+      ]));
+    const replayedHistorySourceIds =
+      terminalOutcome === null
+        ? new Set([threadId])
+        : await replayDescendantHistories(client, threadId, pipeline);
+    return { response, replayedHistorySourceIds, terminalOutcome };
   } finally {
     removeHandler();
+  }
+}
+
+async function replayDescendantHistories(
+  client: AppServerClient,
+  rootThreadId: string,
+  pipeline: EventPipeline,
+): Promise<ReadonlySet<string>> {
+  const replayedSourceIds = new Set([rootThreadId]);
+  const attemptedSourceIds = new Set([rootThreadId]);
+  while (true) {
+    const sourceId = pipeline
+      .sourceIds()
+      .find((candidate) => !attemptedSourceIds.has(candidate));
+    if (sourceId === undefined) return replayedSourceIds;
+    attemptedSourceIds.add(sourceId);
+    try {
+      const response = await client.request<ThreadResumeResponse>(
+        "thread/resume",
+        { threadId: sourceId },
+      );
+      pipeline.replay(sourceId, response.thread.turns, []);
+      replayedSourceIds.add(sourceId);
+    } catch {
+      // The root trace remains usable; gap reporting identifies this source.
+    }
   }
 }
 
@@ -369,6 +407,7 @@ function findHistoryGaps(
   turns: readonly HistoryTurn[],
   checkpoint: RecoveryCheckpoint,
   historyBoundary: TraceGap["historyBoundary"],
+  replayedHistorySourceIds: ReadonlySet<string>,
 ): readonly TraceGap[] {
   const incompleteViews = turns.flatMap((turn) =>
     turn.itemsView !== undefined && turn.itemsView !== "full"
@@ -376,7 +415,8 @@ function findHistoryGaps(
       : [],
   );
   const unavailableDescendants = checkpoint.sourceIds.filter(
-    (sourceId) => sourceId !== threadId,
+    (sourceId) =>
+      sourceId !== threadId && !replayedHistorySourceIds.has(sourceId),
   );
   if (
     historyBoundary === "initial history" &&
@@ -610,7 +650,6 @@ function uniqueRootSkills(
 }
 
 class EventPipeline {
-  readonly #threadId: string;
   readonly #writeLine: (line: string) => void;
   readonly #seenEventIds = new Set<string>();
   readonly #events: NormalizedEvent[] = [];
@@ -628,7 +667,6 @@ class EventPipeline {
   >();
 
   constructor(threadId: string, writeLine: (line: string) => void) {
-    this.#threadId = threadId;
     this.#writeLine = writeLine;
     this.#knownSourceIds = new Set([threadId]);
     this.#sourceDepths.set(threadId, 0);
@@ -650,6 +688,7 @@ class EventPipeline {
   }
 
   replay(
+    sourceId: string,
     turns: readonly HistoryTurn[],
     bufferedNotifications: JsonObject[],
   ): void {
@@ -658,14 +697,14 @@ class EventPipeline {
     for (const turn of turns) {
       for (const item of turn.items) {
         const historyParams = {
-          threadId: this.#threadId,
+          threadId: sourceId,
           turnId: turn.id,
           item,
         };
         const method = historyMethod(item);
         const overlapping = findItemNotifications(
           bufferedNotifications,
-          this.#threadId,
+          sourceId,
           turn.id,
           item.id,
           method,
@@ -674,7 +713,7 @@ class EventPipeline {
           method === "item/completed"
             ? findItemNotifications(
                 bufferedNotifications,
-                this.#threadId,
+                sourceId,
                 turn.id,
                 item.id,
                 "item/started",
@@ -814,20 +853,20 @@ class EventPipeline {
 
   #registerDescendantSource(event: NormalizedEvent): void {
     const item = asObject(event.payload.item);
-    if (
-      item === null ||
-      (item.type !== "collabToolCall" && item.type !== "collabAgentToolCall")
-    ) {
-      return;
-    }
-    if (item.tool !== "spawnAgent" && item.tool !== "spawn_agent") return;
-    const reportedReceiverIds = Array.isArray(item.receiverThreadIds)
-      ? item.receiverThreadIds
-      : [];
+    if (item === null) return;
+    const isSpawnCall =
+      (item.type === "collabToolCall" || item.type === "collabAgentToolCall") &&
+      (item.tool === "spawnAgent" || item.tool === "spawn_agent");
+    const isSubagentActivity = item.type === "subAgentActivity";
+    if (!isSpawnCall && !isSubagentActivity) return;
+    const reportedReceiverIds =
+      isSpawnCall && Array.isArray(item.receiverThreadIds)
+        ? item.receiverThreadIds
+        : [];
     for (const candidate of [
       ...reportedReceiverIds,
-      item.newThreadId,
-      item.receiverThreadId,
+      ...(isSpawnCall ? [item.newThreadId, item.receiverThreadId] : []),
+      ...(isSubagentActivity ? [item.agentThreadId] : []),
     ]) {
       if (
         typeof candidate !== "string" ||

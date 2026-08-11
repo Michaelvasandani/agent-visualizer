@@ -26,6 +26,12 @@ interface EvaluationRunCapturedEnvelopes {
   readonly turnCompletedNotification: Record<string, unknown>;
 }
 
+interface EvaluationPlaceholderContext {
+  readonly threadId: string;
+  readonly turnId: string;
+  readonly structuredOutput: string;
+}
+
 interface FaultInjectionFixture {
   readonly terminalTurns: {
     readonly failed: Record<string, unknown>;
@@ -127,19 +133,20 @@ function respondToEvaluationRun(
   const turnId = isConformanceRun
     ? `${fixture.turnId ?? "fixture-evaluation-turn"}-conformance`
     : fixture.turnId ?? "fixture-evaluation-turn";
+  const evaluationContext: EvaluationPlaceholderContext = {
+    threadId,
+    turnId,
+    structuredOutput: "",
+  };
   if (request.method === "thread/start") {
     socket.send(
       JSON.stringify({
         id: request.id,
-        result:
-          fixture.capturedEnvelopes === undefined
-            ? { thread: { id: threadId } }
-            : replaceEvaluationPlaceholders(
-                fixture.capturedEnvelopes.threadStartResult,
-                threadId,
-                turnId,
-                "",
-              ),
+        result: materializeEvaluationEnvelope(
+          fixture.capturedEnvelopes?.threadStartResult,
+          { thread: { id: threadId } },
+          evaluationContext,
+        ),
       }),
     );
     return true;
@@ -148,15 +155,11 @@ function respondToEvaluationRun(
   socket.send(
     JSON.stringify({
       id: request.id,
-      result:
-        fixture.capturedEnvelopes === undefined
-          ? { turn: { id: turnId, status: "inProgress", items: [] } }
-          : replaceEvaluationPlaceholders(
-              fixture.capturedEnvelopes.turnStartResult,
-              threadId,
-              turnId,
-              "",
-            ),
+      result: materializeEvaluationEnvelope(
+        fixture.capturedEnvelopes?.turnStartResult,
+        { turn: { id: turnId, status: "inProgress", items: [] } },
+        evaluationContext,
+      ),
     }),
   );
   setImmediate(() => {
@@ -193,25 +196,22 @@ function respondToEvaluationRun(
     );
     socket.send(
       JSON.stringify(
-        fixture.capturedEnvelopes === undefined
-          ? {
-              method: "item/completed",
-              params: {
-                threadId,
-                turnId,
-                item: {
-                  type: "agentMessage",
-                  id: "fixture-evaluation-message",
-                  text: structuredOutput,
-                },
-              },
-            }
-          : replaceEvaluationPlaceholders(
-              fixture.capturedEnvelopes.itemCompletedNotification,
+        materializeEvaluationEnvelope(
+          fixture.capturedEnvelopes?.itemCompletedNotification,
+          {
+            method: "item/completed",
+            params: {
               threadId,
               turnId,
-              structuredOutput,
-            ),
+              item: {
+                type: "agentMessage",
+                id: "fixture-evaluation-message",
+                text: structuredOutput,
+              },
+            },
+          },
+          { ...evaluationContext, structuredOutput },
+        ),
       ),
     );
     for (const item of isConformanceRun ? [] : fixture.additionalItems ?? []) {
@@ -224,24 +224,21 @@ function respondToEvaluationRun(
     }
     socket.send(
       JSON.stringify(
-        fixture.capturedEnvelopes === undefined
-          ? {
-              method: "turn/completed",
-              params: {
-                threadId,
-                turn: {
-                  id: turnId,
-                  status: "completed",
-                  items: [],
-                },
-              },
-            }
-          : replaceEvaluationPlaceholders(
-              fixture.capturedEnvelopes.turnCompletedNotification,
+        materializeEvaluationEnvelope(
+          fixture.capturedEnvelopes?.turnCompletedNotification,
+          {
+            method: "turn/completed",
+            params: {
               threadId,
-              turnId,
-              "",
-            ),
+              turn: {
+                id: turnId,
+                status: "completed",
+                items: [],
+              },
+            },
+          },
+          evaluationContext,
+        ),
       ),
     );
   });
@@ -250,25 +247,45 @@ function respondToEvaluationRun(
 
 function replaceEvaluationPlaceholders(
   value: unknown,
-  threadId: string,
-  turnId: string,
-  structuredOutput: string,
+  context: EvaluationPlaceholderContext,
 ): unknown {
-  if (value === "{{EVALUATION_THREAD_ID}}") return threadId;
-  if (value === "{{EVALUATION_TURN_ID}}") return turnId;
-  if (value === "{{STRUCTURED_OUTPUT}}") return structuredOutput;
+  if (value === "{{EVALUATION_THREAD_ID}}") return context.threadId;
+  if (value === "{{EVALUATION_TURN_ID}}") return context.turnId;
+  if (value === "{{STRUCTURED_OUTPUT}}") return context.structuredOutput;
   if (Array.isArray(value)) {
-    return value.map((item) =>
-      replaceEvaluationPlaceholders(item, threadId, turnId, structuredOutput),
-    );
+    return value.map((item) => replaceEvaluationPlaceholders(item, context));
   }
   if (typeof value !== "object" || value === null) return value;
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [
       key,
-      replaceEvaluationPlaceholders(item, threadId, turnId, structuredOutput),
+      replaceEvaluationPlaceholders(item, context),
     ]),
   );
+}
+
+function materializeEvaluationEnvelope(
+  capturedEnvelope: Record<string, unknown> | undefined,
+  fallbackEnvelope: Record<string, unknown>,
+  context: EvaluationPlaceholderContext,
+): unknown {
+  return capturedEnvelope === undefined
+    ? fallbackEnvelope
+    : replaceEvaluationPlaceholders(capturedEnvelope, context);
+}
+
+function requestedThreadIds(
+  requests: readonly Record<string, unknown>[],
+  method: string,
+): readonly string[] {
+  return requests
+    .filter((request) => request.method === method)
+    .map((request) =>
+      String(
+        (request.params as { readonly threadId?: unknown } | undefined)
+          ?.threadId,
+      ),
+    );
 }
 
 function traceFixtureObligations(
@@ -998,6 +1015,7 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
     readonly childResumeResponses: readonly {
       readonly result: {
         readonly thread: {
+          readonly id: string;
           readonly parentThreadId: string;
           readonly threadSource: string;
           readonly turns: readonly {
@@ -1051,17 +1069,28 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
           }),
         );
       } else if (request.method === "thread/resume") {
-        socket.send(
-          JSON.stringify({
-            id: request.id,
-            result: { cwd: repositoryRoot, thread: fixture.history },
-          }),
-        );
-        setImmediate(() => {
-          for (const notification of fixture.notifications) {
-            socket.send(JSON.stringify(notification));
-          }
-        });
+        const params = request.params as { readonly threadId?: unknown };
+        if (params.threadId === fixture.threadId) {
+          socket.send(
+            JSON.stringify({
+              id: request.id,
+              result: { cwd: repositoryRoot, thread: fixture.history },
+            }),
+          );
+          setImmediate(() => {
+            for (const notification of fixture.notifications) {
+              socket.send(JSON.stringify(notification));
+            }
+          });
+        } else {
+          const childResponse = fixture.childResumeResponses.find(
+            ({ result }) => result.thread.id === params.threadId,
+          );
+          assert.notEqual(childResponse, undefined);
+          socket.send(
+            JSON.stringify({ id: request.id, result: childResponse?.result }),
+          );
+        }
       } else if (request.method === "skills/list") {
         socket.send(
           JSON.stringify({
@@ -1129,6 +1158,14 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
     result.stdout,
     /^\[collaboration\].*captured-spec-thread.*spec_review/m,
   );
+  assert.match(
+    result.stdout,
+    /^  \[agent\].*source=captured-standards-thread.*Sanitized Standards reviewer result/m,
+  );
+  assert.match(
+    result.stdout,
+    /^  \[agent\].*source=captured-spec-thread.*Sanitized Spec reviewer result/m,
+  );
   assert.match(result.stdout, /^\[unknown\].*thread\/goal\/cleared/m);
   assert.match(result.stdout, /"durationMs":2000/);
   assert.match(result.stdout, /Skill Run terminal outcome: completed/);
@@ -1145,6 +1182,29 @@ test("replays the captured 0.145.0 code-review fixture through the black-box bou
         ),
     ),
     true,
+  );
+  assert.deepEqual(
+    [...new Set(saved.events.map((event) => event.sourceId))].sort(),
+    [
+      fixture.threadId,
+      ...fixture.childResumeResponses.map(({ result }) => result.thread.id),
+    ].sort(),
+  );
+  assert.deepEqual(
+    requestedThreadIds(requests, "thread/resume"),
+    [
+      fixture.threadId,
+      ...fixture.childResumeResponses.map(({ result }) => result.thread.id),
+    ],
+  );
+  assert.deepEqual(
+    requestedThreadIds(requests, "thread/unsubscribe").filter((threadId) =>
+      threadId.startsWith("captured-"),
+    ),
+    [
+      fixture.threadId,
+      ...fixture.childResumeResponses.map(({ result }) => result.thread.id),
+    ],
   );
   assert.deepEqual(
     Object.keys(faultFixture.evaluationRuns.capturedEnvelopes),

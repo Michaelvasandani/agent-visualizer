@@ -6,11 +6,14 @@ POC. `live-code-review.json` is a sanitized capture from a real
 `$code-review` turn. Sanitization changes values, not method names or payload
 shape. It includes the parent activity plus `thread/resume` responses captured
 from both completed reviewer children, preserving their parent linkage and
-subagent source metadata. The fixture deliberately retains an unfamiliar
-notification so Unknown Event behavior stays covered. `fault-injection.json`
-records the deterministic App Server harness envelopes used for failure,
-cancellation, reconnect, and Evaluation Run isolation. It is explicitly not
-represented as a live failure capture.
+subagent source metadata. The black-box server serves those child responses
+when the Tracer passively resumes the causally reported descendants, and the
+test asserts that both child histories become child-sourced Events in the
+export. The fixture deliberately retains an unfamiliar notification so Unknown
+Event behavior stays covered. `fault-injection.json` records the deterministic
+App Server harness envelopes used for failure, cancellation, reconnect, and
+Evaluation Run isolation. It is explicitly not represented as a live failure
+capture.
 
 `live-code-review-saved-trace.json` is the sanitized, self-contained export
 from the completed manual acceptance run. It retains the terminal outcome,
