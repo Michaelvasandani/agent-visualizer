@@ -245,15 +245,10 @@ function validateObligations(savedTrace: Record<string, unknown>): void {
   requiredArray(savedTrace, "obligations").forEach((value, index) => {
     const label = `obligations[${index}]`;
     if (!isObject(value)) invalidItem("obligations", index);
-    requiredString(value, "id", `${label}.id`);
-    validateObligationSource(value, label);
     if (value.status === "evaluable") {
-      requiredString(
-        value,
-        "observableBehavior",
-        `${label}.observableBehavior`,
-      );
+      validateEvaluableObligation(value, label);
     } else if (value.status === "ambiguous") {
+      validateObligationIdentity(value, label);
       requiredString(value, "ambiguity", `${label}.ambiguity`);
     } else {
       throw new Error(`Saved Trace ${label}.status is unsupported.`);
@@ -269,13 +264,7 @@ function validateFindings(savedTrace: Record<string, unknown>): void {
     if (obligation.status !== "evaluable") {
       throw new Error(`Saved Trace ${label}.obligation must be evaluable.`);
     }
-    requiredString(obligation, "id", `${label}.obligation.id`);
-    validateObligationSource(obligation, `${label}.obligation`);
-    requiredString(
-      obligation,
-      "observableBehavior",
-      `${label}.obligation.observableBehavior`,
-    );
+    validateEvaluableObligation(obligation, `${label}.obligation`);
     if (
       value.state !== "satisfied" &&
       value.state !== "violated" &&
@@ -378,10 +367,23 @@ function validateRootSkill(rootSkill: Record<string, unknown>): void {
   requiredString(rootSkill, "path", "rootSkill.path");
 }
 
-function validateObligationSource(
+function validateEvaluableObligation(
   obligation: Record<string, unknown>,
   label: string,
 ): void {
+  validateObligationIdentity(obligation, label);
+  requiredString(
+    obligation,
+    "observableBehavior",
+    `${label}.observableBehavior`,
+  );
+}
+
+function validateObligationIdentity(
+  obligation: Record<string, unknown>,
+  label: string,
+): void {
+  requiredString(obligation, "id", `${label}.id`);
   const source = requiredObject(obligation, "source", `${label}.source`);
   requiredString(source, "path", `${label}.source.path`);
   requiredString(source, "instruction", `${label}.source.instruction`);

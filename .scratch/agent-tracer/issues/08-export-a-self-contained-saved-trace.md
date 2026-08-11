@@ -38,4 +38,6 @@
   that schema-version-1 loads did not validate exact protocol compatibility,
   required bundle shape, or immutable Event fields was fixed with regression
   coverage. Its sole style judgment, duplicated Skill Attribution rendering,
-  was addressed by sharing the live and replay projection.
+  was addressed by sharing the live and replay projection. A follow-up review
+  confirmed the spec finding resolved; its minor validation-duplication judgment
+  was addressed with shared Obligation validators.
