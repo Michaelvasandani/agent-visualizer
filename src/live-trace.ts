@@ -1,4 +1,5 @@
 import { AppServerClient } from "./app-server-client.js";
+import { compileObligations, renderObligations } from "./obligation.js";
 import {
   constructSkillContract,
   renderSkillContract,
@@ -94,8 +95,8 @@ interface ResolvedAttribution {
 const SENSITIVE_DATA_WARNING =
   "WARNING: THIS LIVE TRACE CONTAINS UNREDACTED SENSITIVE INFORMATION. " +
   "Prompts, credentials, paths, proprietary content, and personal data may be " +
-  "exposed in terminal output; the Skill Contract and Trace are sent unredacted " +
-  "to OpenAI by later Evaluation Runs.";
+  "exposed in terminal output; Skill Contracts and Traces are sent unredacted " +
+  "to OpenAI by Evaluation Runs.";
 
 export async function traceLoadedThread(
   serverUrl: string,
@@ -138,6 +139,8 @@ export async function traceLoadedThread(
       );
       const contract = await constructSkillContract(rootSkill);
       for (const line of renderSkillContract(contract)) writeLine(line);
+      const obligations = await compileObligations(client, contract);
+      for (const line of renderObligations(obligations)) writeLine(line);
     }
     await client.request("thread/unsubscribe", { threadId });
   } finally {

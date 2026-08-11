@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const cliPath = path.join(repositoryRoot, "src", "cli.ts");
@@ -61,6 +61,195 @@ async function runCli(
       resolve({ exitCode, stdout, stderr });
     });
   });
+}
+
+function respondToEvaluationRun(
+  socket: WebSocket,
+  request: Record<string, unknown>,
+  fixture: {
+    readonly obligations: readonly Record<string, unknown>[];
+    readonly additionalItems?: readonly Record<string, unknown>[];
+    readonly threadId?: string;
+    readonly turnId?: string;
+  },
+): boolean {
+  const threadId = fixture.threadId ?? "fixture-evaluation-thread";
+  const turnId = fixture.turnId ?? "fixture-evaluation-turn";
+  if (request.method === "thread/start") {
+    socket.send(
+      JSON.stringify({
+        id: request.id,
+        result: { thread: { id: threadId } },
+      }),
+    );
+    return true;
+  }
+  if (request.method !== "turn/start") return false;
+  socket.send(
+    JSON.stringify({
+      id: request.id,
+      result: {
+        turn: { id: turnId, status: "inProgress", items: [] },
+      },
+    }),
+  );
+  setImmediate(() => {
+    socket.send(
+      JSON.stringify({
+        method: "item/completed",
+        params: {
+          threadId,
+          turnId,
+          item: {
+            type: "agentMessage",
+            id: "fixture-evaluation-message",
+            text: JSON.stringify({ obligations: fixture.obligations }),
+          },
+        },
+      }),
+    );
+    for (const item of fixture.additionalItems ?? []) {
+      socket.send(
+        JSON.stringify({
+          method: "item/completed",
+          params: { threadId, turnId, item },
+        }),
+      );
+    }
+    socket.send(
+      JSON.stringify({
+        method: "turn/completed",
+        params: {
+          threadId,
+          turn: {
+            id: turnId,
+            status: "completed",
+            items: [],
+          },
+        },
+      }),
+    );
+  });
+  return true;
+}
+
+function traceFixtureObligations(
+  skillPath: string,
+): readonly Record<string, unknown>[] {
+  const verificationPath = path.join(
+    path.dirname(skillPath),
+    "references",
+    "verification.md",
+  );
+  const releaseChecksPath = path.join(
+    path.dirname(skillPath),
+    "references",
+    "release-checks.md",
+  );
+  return [
+    [skillPath, "Implement the work described by the developer."],
+    [skillPath, "Inspect the requested change before editing it."],
+    [skillPath, "Before sending the final output, run the tests."],
+    [
+      skillPath,
+      "Follow the [verification workflow](references/verification.md).",
+    ],
+    [skillPath, "Run the output verification command after editing."],
+    [
+      verificationPath,
+      "Run the targeted test after each behavioral change.\nThen read `release-checks.md` and follow its instructions.",
+    ],
+    [releaseChecksPath, "Run the full test suite once at the end."],
+  ].map(([sourcePath, instruction], index) => ({
+    id: `fixture-obligation-${index + 1}`,
+    status: "evaluable",
+    source: { path: sourcePath, instruction },
+    observableBehavior: `The execution performs instruction ${index + 1}.`,
+  }));
+}
+
+async function runObligationValidationFixture(
+  obligations: readonly Record<string, unknown>[],
+): Promise<CliResult> {
+  const skillPath = path.join(
+    repositoryRoot,
+    "test",
+    "fixtures",
+    "skills",
+    "evaluation-fixture",
+    "SKILL.md",
+  );
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  server.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["validation-observed-thread"], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume") {
+        socket.send(
+          JSON.stringify({
+            method: "item/started",
+            params: {
+              threadId: "validation-observed-thread",
+              turnId: "validation-observed-turn",
+              item: {
+                type: "userMessage",
+                id: "validation-user",
+                content: [
+                  { type: "skill", name: "evaluation-fixture", path: skillPath },
+                ],
+              },
+            },
+          }),
+        );
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              thread: {
+                id: "validation-observed-thread",
+                cwd: repositoryRoot,
+                turns: [
+                  {
+                    id: "validation-observed-turn",
+                    status: "completed",
+                    items: [],
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      } else if (respondToEvaluationRun(socket, request, { obligations })) {
+        return;
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+
+  try {
+    const address = server.address() as AddressInfo;
+    return await runCli(
+      ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+      { codexVersion: "codex-cli 0.145.0" },
+    );
+  } finally {
+    server.close();
+  }
 }
 
 test("rejects an unsupported Codex version before observation", async () => {
@@ -1292,6 +1481,12 @@ test("uses exact live Root Skill metadata to construct the recursive execution-o
             }),
           );
         });
+      } else if (
+        respondToEvaluationRun(socket, request, {
+          obligations: traceFixtureObligations(skillPath),
+        })
+      ) {
+        return;
       } else if (request.method === "thread/unsubscribe") {
         socket.send(JSON.stringify({ id: request.id, result: {} }));
       }
@@ -1326,9 +1521,263 @@ test("uses exact live Root Skill metadata to construct the recursive execution-o
       "initialized",
       "thread/loaded/list",
       "thread/resume",
+      "thread/start",
+      "turn/start",
+      "thread/unsubscribe",
       "thread/unsubscribe",
     ],
   );
+});
+
+test("compiles source-linked Obligations in an isolated Evaluation Run", async (t) => {
+  const requests: Array<Record<string, unknown>> = [];
+  let connections = 0;
+  const skillPath = path.join(
+    repositoryRoot,
+    "test",
+    "fixtures",
+    "skills",
+    "evaluation-fixture",
+    "SKILL.md",
+  );
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+
+  server.on("connection", (socket) => {
+    connections += 1;
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      requests.push(request);
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["observed-thread"], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume") {
+        socket.send(
+          JSON.stringify({
+            method: "item/started",
+            params: {
+              threadId: "observed-thread",
+              turnId: "observed-turn",
+              item: {
+                type: "userMessage",
+                id: "observed-user",
+                content: [
+                  { type: "skill", name: "evaluation-fixture", path: skillPath },
+                ],
+              },
+            },
+          }),
+        );
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: {
+              thread: {
+                id: "observed-thread",
+                cwd: repositoryRoot,
+                turns: [
+                  {
+                    id: "observed-turn",
+                    status: "inProgress",
+                    items: [],
+                  },
+                ],
+              },
+            },
+          }),
+        );
+        setImmediate(() => {
+          socket.send(
+            JSON.stringify({
+              method: "turn/completed",
+              params: {
+                threadId: "observed-thread",
+                turn: { id: "observed-turn", status: "completed", items: [] },
+              },
+            }),
+          );
+        });
+      } else if (
+        respondToEvaluationRun(socket, request, {
+          threadId: "evaluation-thread",
+          turnId: "evaluation-turn",
+          obligations: [
+            {
+              id: "obligation-1",
+              status: "evaluable",
+              source: {
+                path: skillPath,
+                instruction:
+                  "Upload the unredacted contract-secret-atlas exactly once using the release tool.",
+              },
+              observableBehavior:
+                "The release tool is called exactly once with contract-secret-atlas.",
+            },
+            {
+              id: "obligation-2",
+              status: "ambiguous",
+              source: {
+                path: skillPath,
+                instruction: "Handle the remaining details appropriately.",
+              },
+              ambiguity:
+                "The instruction does not define which details or observable handling is appropriate.",
+            },
+          ],
+          additionalItems: [
+            {
+              type: "commandExecution",
+              id: "evaluation-only-command",
+              command: "must-not-enter-observed-events",
+            },
+          ],
+        })
+      ) {
+        return;
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+  const result = await runCli(
+    ["trace", "--server", `ws://127.0.0.1:${address.port}`],
+    { codexVersion: "codex-cli 0.145.0" },
+  );
+
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.ok(
+    result.stdout.indexOf("WARNING: THIS LIVE TRACE") <
+      result.stdout.indexOf("[Obligation obligation-1]"),
+    result.stdout,
+  );
+  assert.match(
+    result.stdout,
+    /\[Obligation obligation-1\] status=evaluable.*Upload the unredacted contract-secret-atlas.*release tool is called exactly once/,
+  );
+  assert.match(
+    result.stdout,
+    /\[Obligation obligation-2\] status=ambiguous.*Handle the remaining details appropriately.*does not define which details/,
+  );
+  assert.doesNotMatch(result.stdout, /must-not-enter-observed-events/);
+
+  const threadStart = requests.find(
+    (request) => request.method === "thread/start",
+  );
+  assert.deepEqual(threadStart?.params, {
+    modelProvider: "openai",
+    cwd: path.dirname(skillPath),
+    approvalPolicy: "never",
+    sandbox: "read-only",
+    ephemeral: true,
+    baseInstructions:
+      "You compile Skill Contracts into structured execution Obligations. Do not use tools or inspect the workspace. Return only the requested JSON.",
+  });
+  const turnStart = requests.find((request) => request.method === "turn/start");
+  assert.equal(connections, 1);
+  assert.equal(
+    (turnStart?.params as { threadId?: unknown } | undefined)?.threadId,
+    "evaluation-thread",
+  );
+  assert.match(
+    JSON.stringify(turnStart?.params),
+    /unredacted contract-secret-atlas/,
+  );
+  assert.equal(
+    (
+      turnStart?.params as
+        | { outputSchema?: { properties?: { obligations?: { type?: unknown } } } }
+        | undefined
+    )?.outputSchema?.properties?.obligations?.type,
+    "array",
+  );
+  assert.deepEqual(
+    requests
+      .filter((request) => request.method === "thread/unsubscribe")
+      .map((request) =>
+        (request.params as { threadId?: unknown } | undefined)?.threadId,
+      ),
+    ["evaluation-thread", "observed-thread"],
+  );
+  assert.equal(
+    requests.some(
+      (request) =>
+        request.method === "turn/start" &&
+        (request.params as { threadId?: unknown }).threadId === "observed-thread",
+    ),
+    false,
+  );
+});
+
+test("rejects an Evaluation Run source link that is only an instruction fragment", async () => {
+  const skillPath = path.join(
+    repositoryRoot,
+    "test",
+    "fixtures",
+    "skills",
+    "evaluation-fixture",
+    "SKILL.md",
+  );
+  const result = await runObligationValidationFixture([
+    {
+      id: "fragment-link",
+      status: "evaluable",
+      source: { path: skillPath, instruction: "the" },
+      observableBehavior: "Something observable happens.",
+    },
+    {
+      id: "ambiguous-link",
+      status: "ambiguous",
+      source: {
+        path: skillPath,
+        instruction: "Handle the remaining details appropriately.",
+      },
+      ambiguity: "Appropriate handling is undefined.",
+    },
+  ]);
+
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /does not link to an exact instruction/i);
+});
+
+test("rejects an Evaluation Run that omits a contract instruction", async () => {
+  const skillPath = path.join(
+    repositoryRoot,
+    "test",
+    "fixtures",
+    "skills",
+    "evaluation-fixture",
+    "SKILL.md",
+  );
+  const result = await runObligationValidationFixture([
+    {
+      id: "only-first-instruction",
+      status: "evaluable",
+      source: {
+        path: skillPath,
+        instruction:
+          "Upload the unredacted contract-secret-atlas exactly once using the release tool.",
+      },
+      observableBehavior:
+        "The release tool is called exactly once with contract-secret-atlas.",
+    },
+  ]);
+
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /omitted a Skill Contract instruction/i);
 });
 
 test("requires confirmation before using a history-only Root Skill candidate", async (t) => {
@@ -1422,6 +1871,12 @@ test("requires confirmation before using a history-only Root Skill candidate", a
             },
           }),
         );
+      } else if (
+        respondToEvaluationRun(socket, request, {
+          obligations: traceFixtureObligations(skillPath),
+        })
+      ) {
+        return;
       } else if (request.method === "thread/unsubscribe") {
         socket.send(JSON.stringify({ id: request.id, result: {} }));
       }
@@ -1467,6 +1922,9 @@ test("requires confirmation before using a history-only Root Skill candidate", a
       "thread/loaded/list",
       "thread/resume",
       "skills/list",
+      "thread/start",
+      "turn/start",
+      "thread/unsubscribe",
       "thread/unsubscribe",
       "initialize",
       "initialized",
