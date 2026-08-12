@@ -820,6 +820,22 @@ test("rejects an unsupported Codex version before observation", async () => {
   assert.doesNotMatch(result.stderr, /ECONNREFUSED/);
 });
 
+test("launches the local Trace Explorer command without opening a browser when requested", async () => {
+  const result = await runCli(
+    ["web", "--server", "ws://127.0.0.1:1", "--no-open"],
+    { codexVersion: "codex-cli 0.145.0" },
+  );
+
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stdout, /Trace Explorer: http:\/\/127\.0\.0\.1:4310/);
+  assert.match(
+    result.stdout,
+    /codex --remote ws:\/\/127\.0\.0\.1:1/,
+  );
+  assert.match(result.stdout, /Trace Explorer collection failed:/);
+  assert.equal(result.stderr, "");
+});
+
 test("traces the only loaded thread through a fake App Server", async (t) => {
   const requests: Array<Record<string, unknown>> = [];
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });

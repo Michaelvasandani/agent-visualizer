@@ -1,9 +1,10 @@
 # Agent Tracer
 
 Agent Tracer is a source-run macOS CLI for passively observing a live Codex
-Skill Run through a shared Codex App Server. The current first slice supports
-exactly `codex-cli 0.145.0` and automatically attaches when the server has one
-loaded thread.
+Skill Run through a shared Codex App Server. It includes a loopback-only Trace
+Explorer service and the original terminal projection. The current slice
+supports exactly `codex-cli 0.145.0` and automatically attaches when the server
+has one loaded thread.
 
 ## Requirements
 
@@ -17,7 +18,32 @@ Install the development dependencies with:
 npm install
 ```
 
-## Run a live Trace
+## Launch the Trace Explorer
+
+Start the loopback-only Trace Explorer and an owned shared Codex App Server from
+one foreground command:
+
+```sh
+npm start -- web
+```
+
+The command prints the local browser URL and the `codex --remote` command for an
+interactive TUI, then opens the browser. Pass `--no-open` to leave browser
+launching to the developer. To attach to an App Server managed by another
+process, pass its URL; Agent Tracer will unsubscribe and close its own resources
+without stopping that server:
+
+```sh
+npm start -- web --server ws://127.0.0.1:4500 --no-open
+```
+
+Browser refreshes and disconnects do not stop collection. Each browser socket
+receives the complete in-memory update snapshot on connection and structured
+incremental updates afterward. During active observation, the first interrupt
+defers shutdown until observation and already-started Conformance work settle;
+a second interrupt forces shutdown and may interrupt an owned Codex App Server.
+
+## Run a live Trace in the terminal
 
 Start the shared App Server in one terminal. This foreground process owns the
 server and prints the command needed by the interactive client:

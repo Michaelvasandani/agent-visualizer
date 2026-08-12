@@ -32,14 +32,40 @@ export class AppServerClient {
     );
   }
 
-  static async connect(url: string): Promise<AppServerClient> {
+  static async connect(
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<AppServerClient> {
+    signal?.throwIfAborted();
     const socket = new WebSocket(url);
     await new Promise<void>((resolve, reject) => {
-      socket.once("open", resolve);
-      socket.once("error", reject);
+      const cleanup = (): void => {
+        socket.off("open", onOpen);
+        socket.off("error", onError);
+        signal?.removeEventListener("abort", onAbort);
+      };
+      const onOpen = (): void => {
+        cleanup();
+        resolve();
+      };
+      const onError = (error: Error): void => {
+        cleanup();
+        reject(error);
+      };
+      const onAbort = (): void => {
+        cleanup();
+        socket.once("error", () => undefined);
+        socket.terminate();
+        reject(signal?.reason);
+      };
+      socket.once("open", onOpen);
+      socket.once("error", onError);
+      signal?.addEventListener("abort", onAbort, { once: true });
     });
 
     const client = new AppServerClient(socket);
+    const abortInitialization = (): void => socket.terminate();
+    signal?.addEventListener("abort", abortInitialization, { once: true });
     try {
       const response = await client.request<{ readonly userAgent: string }>(
         "initialize",
@@ -60,7 +86,10 @@ export class AppServerClient {
       return client;
     } catch (error) {
       client.close();
+      if (signal?.aborted === true) throw signal.reason;
       throw error;
+    } finally {
+      signal?.removeEventListener("abort", abortInitialization);
     }
   }
 

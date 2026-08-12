@@ -101,6 +101,8 @@ export interface SkillRunObservation {
 
 export interface ObserveSkillRunOptions {
   readonly serverUrl: string;
+  readonly signal?: AbortSignal;
+  readonly shouldStartConformance?: () => boolean;
   readonly selectThread?: (threadIds: readonly string[]) => Promise<string>;
   readonly confirmHistoricalRootSkill?: (
     rootSkill: RootSkillSelection,
@@ -191,11 +193,17 @@ interface DescendantHistoryGap {
 export async function observeSkillRun(
   options: ObserveSkillRunOptions,
 ): Promise<SkillRunObservation> {
+  options.signal?.throwIfAborted();
   const emit = options.onUpdate ?? (() => undefined);
   emitUpdate(emit, { kind: "lifecycle", state: "connecting" });
-  let client = await AppServerClient.connect(options.serverUrl);
+  let client = await AppServerClient.connect(options.serverUrl, options.signal);
+  const removeAbortConnection = closeConnectionOnAbort(
+    options.signal,
+    () => client.close(),
+  );
 
   try {
+    options.signal?.throwIfAborted();
     emitUpdate(emit, { kind: "lifecycle", state: "selecting-thread" });
     const threadIds = await listAllLoadedThreads(client);
     emitUpdate(emit, {
@@ -216,6 +224,7 @@ export async function observeSkillRun(
       client,
       threadId,
       emit,
+      options.signal,
     );
     client = observation.client;
     emitUpdate(emit, {
@@ -234,7 +243,10 @@ export async function observeSkillRun(
     let findings: readonly Finding[] = Object.freeze([]);
     let evaluationState: "completed" | "failed" | "skipped";
     let evaluationError: unknown | null = null;
-    if (skillAttribution.kind !== "unresolved") {
+    if (
+      skillAttribution.kind !== "unresolved" &&
+      (options.shouldStartConformance?.() ?? true)
+    ) {
       emitUpdate(emit, { kind: "lifecycle", state: "evaluating" });
       const { rootSkill } = skillAttribution;
       try {
@@ -274,10 +286,14 @@ export async function observeSkillRun(
       }
     } else {
       evaluationState = "skipped";
+      const reason =
+        skillAttribution.kind === "unresolved"
+          ? skillAttribution.reason
+          : "Shutdown was requested before Conformance began.";
       emitUpdate(emit, {
         kind: "evaluation-state",
         state: evaluationState,
-        reason: skillAttribution.reason,
+        reason,
       });
     }
     for (const subscribedThreadId of observation.subscribedThreadIds) {
@@ -301,6 +317,7 @@ export async function observeSkillRun(
       findings,
     });
   } finally {
+    removeAbortConnection();
     client.close();
   }
 }
@@ -368,6 +385,7 @@ async function observeResumedThread(
   initialClient: AppServerClient,
   threadId: string,
   emit: (update: ObservationUpdate) => void,
+  signal?: AbortSignal,
 ): Promise<ThreadObservation> {
   const pipeline = new EventPipeline(threadId, (event) =>
     emitUpdate(emit, { kind: "event", event }),
@@ -377,80 +395,99 @@ async function observeResumedThread(
   let cwd: string | null = null;
   let recoveryCheckpoint: RecoveryCheckpoint | null = null;
   let selectedTurnId: string | null = null;
+  const removeAbortConnection = closeConnectionOnAbort(
+    signal,
+    () => client.close(),
+  );
 
-  while (true) {
-    let result: Awaited<ReturnType<typeof observeConnection>>;
-    try {
-      result = await observeConnection(
-        client,
+  try {
+    while (true) {
+      signal?.throwIfAborted();
+      let result: Awaited<ReturnType<typeof observeConnection>>;
+      try {
+        result = await observeConnection(
+          client,
+          threadId,
+          pipeline,
+          selectedTurnId,
+        );
+      } catch (error) {
+        if (recoveryCheckpoint === null) throw error;
+        const failureGap = recoveryFailureGap(recoveryCheckpoint, error);
+        emitUpdate(emit, { kind: "gap", gap: failureGap });
+        client.close();
+        throw error;
+      }
+      selectedTurnId = result.selectedTurnId;
+      cwd = result.response.cwd ?? result.response.thread.cwd ?? cwd;
+      const isRecovery = recoveryCheckpoint !== null;
+      const historyCheckpoint = recoveryCheckpoint ?? {
+        afterEventId: null,
+        sourceIds: pipeline.sourceIds(),
+      };
+      const historyGaps = findHistoryGaps(
         threadId,
-        pipeline,
-        selectedTurnId,
+        result.response.thread.turns,
+        historyCheckpoint,
+        isRecovery ? "reconnect history" : "initial history",
+        result.completeSourceIds,
+        result.descendantHistoryGaps,
+        result.rootNotificationGapReasons,
       );
-    } catch (error) {
-      if (recoveryCheckpoint === null) throw error;
-      const failureGap = recoveryFailureGap(recoveryCheckpoint, error);
-      emitUpdate(emit, { kind: "gap", gap: failureGap });
-      client.close();
-      throw error;
-    }
-    selectedTurnId = result.selectedTurnId;
-    cwd = result.response.cwd ?? result.response.thread.cwd ?? cwd;
-    const isRecovery = recoveryCheckpoint !== null;
-    const historyCheckpoint = recoveryCheckpoint ?? {
-      afterEventId: null,
-      sourceIds: pipeline.sourceIds(),
-    };
-    const historyGaps = findHistoryGaps(
-      threadId,
-      result.response.thread.turns,
-      historyCheckpoint,
-      isRecovery ? "reconnect history" : "initial history",
-      result.completeSourceIds,
-      result.descendantHistoryGaps,
-      result.rootNotificationGapReasons,
-    );
-    gaps.push(...historyGaps);
-    for (const gap of historyGaps) {
-      emitUpdate(emit, { kind: "gap", gap });
-    }
-    if (
-      isRecovery &&
-      selectedThreadItemHistoryIsFull(result.response.thread.turns)
-    ) {
+      gaps.push(...historyGaps);
+      for (const gap of historyGaps) {
+        emitUpdate(emit, { kind: "gap", gap });
+      }
+      if (
+        isRecovery &&
+        selectedThreadItemHistoryIsFull(result.response.thread.turns)
+      ) {
+        emitUpdate(emit, {
+          kind: "lifecycle",
+          state: "observing",
+          recoveryComplete: true,
+        });
+      }
+      recoveryCheckpoint = null;
+
+      if (result.terminalOutcome !== null) {
+        return Object.freeze({
+          client,
+          cwd,
+          events: pipeline.events(),
+          gaps: Object.freeze([...gaps]),
+          subscribedThreadIds: Object.freeze([...result.subscribedThreadIds]),
+          terminalOutcome: result.terminalOutcome,
+        });
+      }
+
+      recoveryCheckpoint = pipeline.recoveryCheckpoint();
       emitUpdate(emit, {
         kind: "lifecycle",
-        state: "observing",
-        recoveryComplete: true,
+        state: "recovering",
+        afterEventId: recoveryCheckpoint.afterEventId,
       });
+      signal?.throwIfAborted();
+      try {
+        client = await AppServerClient.connect(serverUrl, signal);
+      } catch (error) {
+        if (signal?.aborted === true) throw signal.reason;
+        const failureGap = recoveryFailureGap(recoveryCheckpoint, error);
+        emitUpdate(emit, { kind: "gap", gap: failureGap });
+        throw error;
+      }
     }
-    recoveryCheckpoint = null;
-
-    if (result.terminalOutcome !== null) {
-      return Object.freeze({
-        client,
-        cwd,
-        events: pipeline.events(),
-        gaps: Object.freeze([...gaps]),
-        subscribedThreadIds: Object.freeze([...result.subscribedThreadIds]),
-        terminalOutcome: result.terminalOutcome,
-      });
-    }
-
-    recoveryCheckpoint = pipeline.recoveryCheckpoint();
-    emitUpdate(emit, {
-      kind: "lifecycle",
-      state: "recovering",
-      afterEventId: recoveryCheckpoint.afterEventId,
-    });
-    try {
-      client = await AppServerClient.connect(serverUrl);
-    } catch (error) {
-      const failureGap = recoveryFailureGap(recoveryCheckpoint, error);
-      emitUpdate(emit, { kind: "gap", gap: failureGap });
-      throw error;
-    }
+  } finally {
+    removeAbortConnection();
   }
+}
+
+function closeConnectionOnAbort(
+  signal: AbortSignal | undefined,
+  close: () => void,
+): () => void {
+  signal?.addEventListener("abort", close);
+  return () => signal?.removeEventListener("abort", close);
 }
 
 async function observeConnection(

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import type { AddressInfo } from "node:net";
+import { createServer, type AddressInfo } from "node:net";
 import test from "node:test";
 import { WebSocketServer } from "ws";
 
@@ -283,6 +283,145 @@ test("returns the completed Trace with a structured evaluation failure", async (
     finalUpdate?.kind === "lifecycle" && finalUpdate.state === "completed",
     true,
   );
+});
+
+test("does not start Conformance after deferred shutdown is requested", async (t) => {
+  const { server, serverUrl } = await startTerminalObservationServer({
+    includeRootSkill: true,
+  });
+  t.after(() => server.close());
+  const updates: ObservationUpdate[] = [];
+
+  const observation = await observeSkillRun({
+    serverUrl,
+    shouldStartConformance: () => false,
+    onUpdate: (update) => updates.push(update),
+  });
+
+  assert.equal(observation.skillAttribution.kind, "exact");
+  assert.equal(observation.evaluationState, "skipped");
+  assert.equal(observation.skillContract, null);
+  assert.deepEqual(observation.obligations, []);
+  assert.deepEqual(observation.findings, []);
+  assert.equal(
+    updates.some(
+      (update) => update.kind === "lifecycle" && update.state === "evaluating",
+    ),
+    false,
+  );
+  assert.equal(
+    updates.some(
+      (update) =>
+        update.kind === "evaluation-state" &&
+        update.state === "skipped" &&
+        update.reason === "Shutdown was requested before Conformance began.",
+    ),
+    true,
+  );
+});
+
+test("aborts active collection by closing only the Tracer subscription", async (t) => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+  let connections = 0;
+  let resolveResumed: () => void = () => undefined;
+  const resumed = new Promise<void>((resolve) => {
+    resolveResumed = resolve;
+  });
+  server.on("connection", (socket) => {
+    connections += 1;
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (request.method === "initialize") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+          }),
+        );
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { data: ["active-thread"], nextCursor: null },
+          }),
+        );
+      } else if (request.method === "thread/resume") {
+        socket.send(
+          JSON.stringify({
+            id: request.id,
+            result: { thread: { id: "active-thread", turns: [] } },
+          }),
+        );
+        resolveResumed();
+      }
+    });
+  });
+  const address = server.address() as AddressInfo;
+  const abortController = new AbortController();
+  const observation = observeSkillRun({
+    serverUrl: `ws://127.0.0.1:${address.port}`,
+    signal: abortController.signal,
+  });
+  await resumed;
+
+  abortController.abort(new Error("forced fixture shutdown"));
+
+  await assert.rejects(observation, /forced fixture shutdown/);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(connections, 1, "an intentional abort must not reconnect");
+});
+
+test("aborts while the Tracer is still connecting", async (t) => {
+  const server = createServer(() => undefined);
+  await new Promise<void>((resolve) =>
+    server.listen(0, "127.0.0.1", resolve),
+  );
+  t.after(() => server.close());
+  const address = server.address() as AddressInfo;
+  const abortController = new AbortController();
+  const observation = observeSkillRun({
+    serverUrl: `ws://127.0.0.1:${address.port}`,
+    signal: abortController.signal,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  abortController.abort(new Error("connecting fixture shutdown"));
+
+  await assert.rejects(
+    Promise.race([
+      observation,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("abort timed out")), 500),
+      ),
+    ]),
+    /connecting fixture shutdown/,
+  );
+});
+
+test("aborts while initializing an App Server connection", async (t) => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+  let resolveInitialize: () => void = () => undefined;
+  const initializeReceived = new Promise<void>((resolve) => {
+    resolveInitialize = resolve;
+  });
+  server.on("connection", (socket) => {
+    socket.on("message", () => resolveInitialize());
+  });
+  const address = server.address() as AddressInfo;
+  const abortController = new AbortController();
+  const observation = observeSkillRun({
+    serverUrl: `ws://127.0.0.1:${address.port}`,
+    signal: abortController.signal,
+  });
+  await initializeReceived;
+
+  abortController.abort(new Error("initialization fixture shutdown"));
+
+  await assert.rejects(observation, /initialization fixture shutdown/);
 });
 
 async function startTerminalObservationServer(options: {

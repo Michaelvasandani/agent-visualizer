@@ -6,11 +6,17 @@ import { requireSupportedCodexVersion } from "./codex-version.js";
 import { traceLoadedThread } from "./live-trace.js";
 import { replaySavedTrace } from "./saved-trace.js";
 import { runForegroundSharedServer } from "./shared-server.js";
+import { launchTraceExplorer } from "./trace-explorer-command.js";
 
 async function main(args: readonly string[]): Promise<void> {
   const command = args[0];
-  if (command !== "trace" && command !== "server" && command !== "replay") {
-    throw new Error("Usage: agent-tracer <server|trace|replay>");
+  if (
+    command !== "trace" &&
+    command !== "server" &&
+    command !== "replay" &&
+    command !== "web"
+  ) {
+    throw new Error("Usage: agent-tracer <server|trace|replay|web>");
   }
 
   if (command === "replay") {
@@ -22,6 +28,26 @@ async function main(args: readonly string[]): Promise<void> {
   }
 
   await requireSupportedCodexVersion();
+
+  if (command === "web") {
+    const commandArgs = args.slice(1);
+    const serverUrl = readOptionalOption(commandArgs, "--server");
+    const runtime = await launchTraceExplorer({
+      ...(serverUrl === undefined ? {} : { serverUrl }),
+      noOpen: commandArgs.includes("--no-open"),
+      writeLine: (line) => process.stdout.write(`${line}\n`),
+    });
+    const onInterrupt = (): void => runtime.interrupt();
+    process.on("SIGINT", onInterrupt);
+    process.on("SIGTERM", onInterrupt);
+    try {
+      process.exitCode = await runtime.whenExited();
+    } finally {
+      process.off("SIGINT", onInterrupt);
+      process.off("SIGTERM", onInterrupt);
+    }
+    return;
+  }
 
   if (command === "trace") {
     const serverUrl = readOption(args.slice(1), "--server");
