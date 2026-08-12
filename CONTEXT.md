@@ -20,6 +20,26 @@ _Avoid_: Failed trace, partial log
 The append-only terminal projection of a Trace, including unredacted details reported by its event source and causal indentation for related activity.
 _Avoid_: Dashboard, activity tree
 
+**Trace Explorer**:
+The local browser interface for observing a Trace as it grows and inspecting the completed Skill Run and its Conformance. It is the primary interactive interface but does not replace the CLI.
+_Avoid_: Dashboard, web visualizer
+
+**Activity Graph**:
+The interactive causal projection of a Trace in the Trace Explorer. It grows during observation without asserting a total order across concurrent activity.
+_Avoid_: Timeline, activity tree
+
+**Activity Node**:
+A visual work unit in the Activity Graph derived from one or more Events, such as an agent, turn, tool call, command, or File Change. Lifecycle Events may update one Activity Node while remaining immutable in the underlying Trace.
+_Avoid_: Event node, span
+
+**Run List**:
+The Trace Explorer's in-memory collection of the active Skill Run and Skill Runs completed since the local process started. It is discarded when the process exits.
+_Avoid_: Run history, saved sessions
+
+**Armed State**:
+The Trace Explorer state in which an Observable Session has been selected and the Tracer is waiting to observe its next Root Skill invocation. No Skill Run exists until that turn begins.
+_Avoid_: Recording, idle trace
+
 **Saved Trace**:
 A versioned JSON bundle the developer explicitly chooses to persist or export, containing run metadata, the Skill Contract, Obligations, Events, and Findings. Traces otherwise remain in memory only for the duration of observation and Conformance evaluation.
 _Avoid_: Automatic log, session history
