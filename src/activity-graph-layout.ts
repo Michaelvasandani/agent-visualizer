@@ -62,15 +62,24 @@ export function layoutActivityGraph(
     );
     for (const [nodeIndex, nodeId] of lane.nodeIds.entries()) {
       if (positionsByNodeId[nodeId] !== undefined) continue;
+      const node = graph.nodesById[nodeId];
       const priorPosition = [...lane.nodeIds]
         .slice(0, nodeIndex)
         .reverse()
         .map((priorNodeId) => positionsByNodeId[priorNodeId])
         .find((position) => position !== undefined);
+      const causalParentPosition = node?.causalParentNodeId === null
+        ? undefined
+        : positionsByNodeId[node?.causalParentNodeId ?? ""];
       positionsByNodeId[nodeId] = Object.freeze({
-        x: priorPosition === undefined
-          ? laneStart + nodeIndex * NODE_GAP
-          : priorPosition.x + NODE_GAP,
+        x: Math.max(
+          priorPosition === undefined
+            ? laneStart + nodeIndex * NODE_GAP
+            : priorPosition.x + NODE_GAP,
+          causalParentPosition === undefined
+            ? NODE_START_X
+            : causalParentPosition.x + CHILD_OFFSET_X,
+        ),
         y: laneY,
       });
     }

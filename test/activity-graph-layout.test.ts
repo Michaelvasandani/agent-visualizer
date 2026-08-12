@@ -66,7 +66,7 @@ test("lays out authoritative source sequence left to right and spawned sources i
     sourceSequence: 1,
     sourceDepth: 1,
     sourceParentId: spawn.id,
-    causalParentId: "child/turn",
+    causalParentId: "root/turn/tool/completed",
     item: { id: "tool", type: "mcpToolCall", tool: "review", status: "completed" },
   });
 
@@ -80,7 +80,7 @@ test("lays out authoritative source sequence left to right and spawned sources i
 
   assert.ok(layout.positionsByNodeId["root/turn/spawn"]!.x < layout.positionsByNodeId["root/turn/tool"]!.x);
   assert.ok(layout.laneYBySource.child! > layout.laneYBySource.root!);
-  assert.ok(layout.positionsByNodeId["child/turn/tool"]!.x > layout.positionsByNodeId["root/turn/spawn"]!.x);
+  assert.ok(layout.positionsByNodeId["child/turn/tool"]!.x > layout.positionsByNodeId["root/turn/tool"]!.x);
   assert.equal(layout.positionsByNodeId["child/turn/tool"]!.y, layout.laneYBySource.child);
 });
 
