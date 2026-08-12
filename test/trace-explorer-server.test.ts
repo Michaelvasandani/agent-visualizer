@@ -49,6 +49,11 @@ test("serves a fully local shell on loopback and accepts only same-origin browse
   assert.match(html, /src="\/assets\/app\.js"/);
   assert.match(html, /href="\/assets\/app\.css"/);
   assert.match(html, /Conformance:/);
+  assert.match(html, /<svg[^>]+id="activity-graph"/);
+  assert.match(html, /aria-label="Search activity"/);
+  assert.match(html, />Re-layout</);
+  assert.match(html, />Pause follow</);
+  assert.match(html, /Collapse selected branch/);
   assert.doesNotMatch(html, /https?:\/\/(?!127\.0\.0\.1)/);
 
   const [scriptResponse, styleResponse] = await Promise.all([
@@ -57,6 +62,21 @@ test("serves a fully local shell on loopback and accepts only same-origin browse
   ]);
   assert.equal(scriptResponse.status, 200);
   assert.equal(styleResponse.status, 200);
+  const [script, style] = await Promise.all([
+    scriptResponse.text(),
+    styleResponse.text(),
+  ]);
+  assert.match(script, /createElementNS/);
+  assert.match(script, /activityGraph/);
+  assert.match(script, /collapsedBranchNodeIds/);
+  assert.match(script, /cameraFollowPaused/);
+  assert.match(script, /pointerdown/);
+  assert.match(script, /keydown/);
+  assert.match(script, /kind: "re-layout"/);
+  assert.match(style, /prefers-color-scheme: dark/);
+  assert.match(style, /\.activity-node\.state-failed/);
+  assert.match(style, /\.activity-node\.type-unknown/);
+  assert.match(style, /\.integrity-gap/);
 
   const browserSocketUrl = server.browserUrl.replace("http:", "ws:") + "/live";
   const accepted = new WebSocket(browserSocketUrl, {

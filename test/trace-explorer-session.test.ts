@@ -5,6 +5,7 @@ import {
   createTraceExplorerSessionManager,
   type TraceExplorerSessionDependencies,
 } from "../src/trace-explorer-session.js";
+import { createNormalizedEvent } from "../src/trace-event.js";
 import type {
   ObserveSkillRunOptions,
   SkillRunObservation,
@@ -254,5 +255,63 @@ test("retains run updates that race active-turn attachment before observing is r
     ),
     true,
   );
+  await manager.close();
+});
+
+test("publishes a stable Activity Graph layout and supports explicit Re-layout", async () => {
+  const observation = deferred<SkillRunObservation>();
+  const manager = createTraceExplorerSessionManager({
+    serverUrl: "ws://fixture.test",
+    dependencies: {
+      observeSkillRun: async (options) => {
+        options.onUpdate?.({
+          kind: "thread-selected",
+          threadId: "root",
+          automatic: true,
+        });
+        options.onUpdate?.({ kind: "lifecycle", state: "observing" });
+        options.onUpdate?.({
+          kind: "event",
+          event: createNormalizedEvent({
+            id: "root/turn/tool/completed",
+            sourceId: "root",
+            sourceSequence: 1,
+            sourceParentId: null,
+            sourceDepth: 0,
+            causalParentId: "root/turn",
+            method: "item/completed",
+            kind: "tool",
+            timing: null,
+            observationSources: ["live"],
+            payload: {
+              threadId: "root",
+              turnId: "turn",
+              item: {
+                id: "tool",
+                type: "mcpToolCall",
+                tool: "inspect",
+                status: "completed",
+              },
+            },
+          }),
+        });
+        return await observation.promise;
+      },
+    },
+  });
+  manager.start();
+  await nextTask();
+
+  const run = manager.snapshot().runs[0];
+  assert.equal(run?.activityGraph.nodesById["root/turn/tool"]?.summary, "inspect");
+  assert.deepEqual(run?.activityLayout.positionsByNodeId["root/turn/tool"], {
+    x: 164,
+    y: 96,
+  });
+  assert.equal(manager.dispatch({ kind: "re-layout" }), true);
+  assert.equal(manager.snapshot().runs[0]?.activityLayout.width, 900);
+
+  observation.resolve(completedObservation("root"));
+  await nextTask();
   await manager.close();
 });

@@ -5,6 +5,15 @@ import {
   type ObservationUpdate,
   type SkillRunObservation,
 } from "./trace-observation.js";
+import {
+  projectActivityGraph,
+  updateActivityGraphProjection,
+  type ActivityGraphProjection,
+} from "./activity-graph.js";
+import {
+  layoutActivityGraph,
+  type ActivityGraphLayout,
+} from "./activity-graph-layout.js";
 
 export type TraceExplorerPhase =
   | "connecting"
@@ -39,6 +48,8 @@ export interface TraceExplorerRunSnapshot {
   readonly status: TraceExplorerRunStatus;
   readonly updates: readonly ObservationUpdate[];
   readonly observation: SkillRunObservation | null;
+  readonly activityGraph: ActivityGraphProjection;
+  readonly activityLayout: ActivityGraphLayout;
 }
 
 export interface TraceExplorerSnapshot {
@@ -57,7 +68,8 @@ export interface TraceExplorerSnapshot {
 export type TraceExplorerBrowserAction =
   | { readonly kind: "select-session"; readonly sessionId: string }
   | { readonly kind: "select-run"; readonly runId: string }
-  | { readonly kind: "trace-next-run" };
+  | { readonly kind: "trace-next-run" }
+  | { readonly kind: "re-layout" };
 
 export interface TraceExplorerSessionDependencies {
   readonly observeSkillRun: (
@@ -79,6 +91,8 @@ interface MutableRun {
   status: TraceExplorerRunStatus;
   readonly updates: ObservationUpdate[];
   observation: SkillRunObservation | null;
+  activityGraph: ActivityGraphProjection;
+  activityLayout: ActivityGraphLayout;
 }
 
 interface PendingChoice {
@@ -158,15 +172,33 @@ export function createTraceExplorerSessionManager(options: {
     if (sessionId === null) {
       throw new Error("Cannot create a Skill Run without a selected session.");
     }
+    let activityGraph = projectActivityGraph({
+      rootSourceId: sessionId,
+      events: [],
+      gaps: [],
+      terminalOutcome: null,
+    });
+    let activityLayout = layoutActivityGraph(activityGraph);
     const run: MutableRun = {
       id: `run-${runs.length + 1}`,
       sessionId,
       status: "observing",
       updates: [],
       observation: null,
+      activityGraph,
+      activityLayout,
     };
     runs.push(run);
-    run.updates.push(...pendingRunUpdates);
+    for (const update of pendingRunUpdates) {
+      run.updates.push(update);
+      ({ activityGraph, activityLayout } = applyGraphUpdate(
+        activityGraph,
+        activityLayout,
+        update,
+      ));
+    }
+    run.activityGraph = activityGraph;
+    run.activityLayout = activityLayout;
     pendingRunUpdates.length = 0;
     activeRunId = run.id;
     viewedRunId = run.id;
@@ -207,6 +239,13 @@ export function createTraceExplorerSessionManager(options: {
     const run = currentRun();
     if (run !== undefined) {
       run.updates.push(update);
+      const graphState = applyGraphUpdate(
+        run.activityGraph,
+        run.activityLayout,
+        update,
+      );
+      run.activityGraph = graphState.activityGraph;
+      run.activityLayout = graphState.activityLayout;
     } else if (isRunUpdate(update)) {
       pendingRunUpdates.push(update);
     }
@@ -274,6 +313,11 @@ export function createTraceExplorerSessionManager(options: {
     }
     run.status = observation.terminalOutcome.kind;
     run.observation = observation;
+    run.activityGraph = updateActivityGraphProjection(run.activityGraph, {
+      kind: "terminal-outcome",
+      outcome: observation.terminalOutcome,
+    });
+    run.activityLayout = layoutActivityGraph(run.activityGraph, run.activityLayout);
     evaluationState = observation.evaluationState;
     activeRunId = null;
     viewedRunId = run.id;
@@ -322,6 +366,13 @@ export function createTraceExplorerSessionManager(options: {
       if (action.kind === "trace-next-run") {
         if (phase !== "completed" || resolveNextRun === null) return false;
         resolveNextRun();
+        return true;
+      }
+      if (action.kind === "re-layout") {
+        const run = runs.find(({ id }) => id === viewedRunId);
+        if (run === undefined) return false;
+        run.activityLayout = layoutActivityGraph(run.activityGraph);
+        publish();
         return true;
       }
       if (
@@ -383,6 +434,8 @@ function freezeSnapshot(state: {
     status: run.status,
     updates: Object.freeze([...run.updates]),
     observation: run.observation,
+    activityGraph: run.activityGraph,
+    activityLayout: run.activityLayout,
   }));
   return Object.freeze({
     revision: state.revision,
@@ -396,4 +449,26 @@ function freezeSnapshot(state: {
     runs: Object.freeze(runSnapshots),
     error: state.error,
   });
+}
+
+function applyGraphUpdate(
+  activityGraph: ActivityGraphProjection,
+  activityLayout: ActivityGraphLayout,
+  update: ObservationUpdate,
+): {
+  readonly activityGraph: ActivityGraphProjection;
+  readonly activityLayout: ActivityGraphLayout;
+} {
+  if (
+    update.kind !== "event" &&
+    update.kind !== "gap" &&
+    update.kind !== "terminal-outcome"
+  ) {
+    return { activityGraph, activityLayout };
+  }
+  const nextGraph = updateActivityGraphProjection(activityGraph, update);
+  return {
+    activityGraph: nextGraph,
+    activityLayout: layoutActivityGraph(nextGraph, activityLayout),
+  };
 }

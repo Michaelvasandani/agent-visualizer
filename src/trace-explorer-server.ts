@@ -3,6 +3,12 @@ import type { AddressInfo } from "node:net";
 
 import WebSocket, { WebSocketServer } from "ws";
 
+import {
+  TRACE_EXPLORER_HTML,
+  TRACE_EXPLORER_SCRIPT,
+  TRACE_EXPLORER_STYLE,
+} from "./trace-explorer-assets.js";
+
 import type {
   TraceExplorerBrowserAction,
   TraceExplorerSessionManager,
@@ -10,104 +16,6 @@ import type {
 } from "./trace-explorer-session.js";
 
 const LOOPBACK_HOST = "127.0.0.1";
-
-const HTML = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Trace Explorer</title>
-    <link rel="stylesheet" href="/assets/app.css">
-  </head>
-  <body>
-    <main>
-      <h1>Trace Explorer</h1>
-      <p id="connection">Connecting to the local Tracer…</p>
-      <label for="sessions">Observable Session</label>
-      <select id="sessions"></select>
-      <p>State: <strong id="phase">Connecting</strong></p>
-      <p>Conformance: <strong id="evaluation">not-started</strong></p>
-      <button id="trace-next" type="button" hidden>Trace Next Run</button>
-      <h2>Run List</h2>
-      <ol id="runs"></ol>
-    </main>
-    <script type="module" src="/assets/app.js"></script>
-  </body>
-</html>`;
-
-const SCRIPT = `const status = document.querySelector("#connection");
-const sessionSelect = document.querySelector("#sessions");
-const phase = document.querySelector("#phase");
-const evaluation = document.querySelector("#evaluation");
-const traceNext = document.querySelector("#trace-next");
-const runList = document.querySelector("#runs");
-const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-let socket;
-
-function send(action) {
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(action));
-}
-
-function render(snapshot) {
-  phase.textContent = snapshot.phase;
-  evaluation.textContent = snapshot.evaluationState;
-  sessionSelect.replaceChildren();
-  if (snapshot.sessions.length !== 1 && snapshot.selectedSessionId === null) {
-    const prompt = document.createElement("option");
-    prompt.textContent = "Choose a session…";
-    prompt.value = "";
-    sessionSelect.append(prompt);
-  }
-  for (const sessionId of snapshot.sessions) {
-    const option = document.createElement("option");
-    option.value = sessionId;
-    option.textContent = sessionId;
-    option.selected = sessionId === snapshot.selectedSessionId;
-    sessionSelect.append(option);
-  }
-  sessionSelect.disabled = snapshot.sessionSwitchingLocked;
-  traceNext.hidden = snapshot.phase !== "completed";
-  runList.replaceChildren();
-  for (const run of snapshot.runs) {
-    const item = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = run.id + " · " + run.sessionId + " · " + run.status;
-    button.ariaPressed = String(run.id === snapshot.viewedRunId);
-    button.addEventListener("click", () => send({ kind: "select-run", runId: run.id }));
-    item.append(button);
-    runList.append(item);
-  }
-}
-
-sessionSelect.addEventListener("change", () => {
-  if (sessionSelect.value !== "") {
-    send({ kind: "select-session", sessionId: sessionSelect.value });
-  }
-});
-traceNext.addEventListener("click", () => send({ kind: "trace-next-run" }));
-
-function connect() {
-  socket = new WebSocket(protocol + "//" + location.host + "/live");
-  socket.addEventListener("open", () => { status.textContent = "Connected to the local Tracer."; });
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    if (message.kind === "snapshot" || message.kind === "update") render(message.snapshot);
-  });
-  socket.addEventListener("close", () => {
-    status.textContent = "Disconnected from the local Tracer; reconnecting…";
-    setTimeout(connect, 500);
-  });
-}
-connect();`;
-
-const STYLE = `:root { color-scheme: light dark; font-family: ui-monospace, monospace; }
-body { margin: 0; min-height: 100vh; display: grid; place-items: center; }
-main { width: min(42rem, calc(100% - 4rem)); padding: 2rem; }
-h1 { margin-block: 0 0.75rem; }
-select, button { font: inherit; }
-#runs { padding-inline-start: 1.5rem; }
-#runs button { margin-block: 0.25rem; }`;
 
 export type TraceExplorerBrowserMessage =
   | { readonly kind: "snapshot"; readonly snapshot: TraceExplorerSnapshot }
@@ -197,13 +105,16 @@ function localAsset(
   url: string | undefined,
 ): { readonly contentType: string; readonly body: string } | null {
   if (url === "/" || url === "/index.html") {
-    return { contentType: "text/html; charset=utf-8", body: HTML };
+    return { contentType: "text/html; charset=utf-8", body: TRACE_EXPLORER_HTML };
   }
   if (url === "/assets/app.js") {
-    return { contentType: "text/javascript; charset=utf-8", body: SCRIPT };
+    return {
+      contentType: "text/javascript; charset=utf-8",
+      body: TRACE_EXPLORER_SCRIPT,
+    };
   }
   if (url === "/assets/app.css") {
-    return { contentType: "text/css; charset=utf-8", body: STYLE };
+    return { contentType: "text/css; charset=utf-8", body: TRACE_EXPLORER_STYLE };
   }
   return null;
 }
@@ -244,7 +155,9 @@ function parseBrowserAction(source: string): TraceExplorerBrowserAction | null {
   if (typeof value !== "object" || value === null || !("kind" in value)) {
     return null;
   }
-  if (value.kind === "trace-next-run") return { kind: value.kind };
+  if (value.kind === "trace-next-run" || value.kind === "re-layout") {
+    return { kind: value.kind };
+  }
   if (
     value.kind === "select-session" &&
     "sessionId" in value &&
