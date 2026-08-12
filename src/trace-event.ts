@@ -69,7 +69,7 @@ export function renderTraceEvent(event: NormalizedEvent): string {
     event.sourceParentId === null ? "" : ` causedBy=${event.sourceParentId}`;
   const timing = event.timing === null ? "" : ` timing=${JSON.stringify(event.timing)}`;
   const sourceType =
-    event.kind === "unknown" ? ` sourceType=${unknownSourceType(event)}` : "";
+    event.kind === "unknown" ? ` sourceType=${unknownEventSourceType(event)}` : "";
   const causalParent =
     event.causalParentId === null ? "none" : event.causalParentId;
   return (
@@ -80,7 +80,7 @@ export function renderTraceEvent(event: NormalizedEvent): string {
   );
 }
 
-function unknownSourceType(event: NormalizedEvent): string {
+export function unknownEventSourceType(event: NormalizedEvent): string {
   const item = event.payload.item;
   if (
     typeof item === "object" &&
