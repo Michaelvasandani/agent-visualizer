@@ -313,6 +313,11 @@ function zoomBy(factor) {
   applyCamera();
 }
 
+function resetCamera() {
+  camera = { x: 36, y: 36, scale: 1 };
+  applyCamera();
+}
+
 sessionSelect.addEventListener("change", () => {
   if (sessionSelect.value !== "") send({ kind: "select-session", sessionId: sessionSelect.value });
 });
@@ -321,7 +326,7 @@ search.addEventListener("input", () => renderActivityGraph(viewedRun(latestSnaps
 filter.addEventListener("change", () => renderActivityGraph(viewedRun(latestSnapshot)));
 document.querySelector("#zoom-out").addEventListener("click", () => zoomBy(0.8));
 document.querySelector("#zoom-in").addEventListener("click", () => zoomBy(1.25));
-document.querySelector("#reset-view").addEventListener("click", () => { camera = { x: 36, y: 36, scale: 1 }; applyCamera(); });
+document.querySelector("#reset-view").addEventListener("click", resetCamera);
 document.querySelector("#re-layout").addEventListener("click", () => send({ kind: "re-layout" }));
 followButton.addEventListener("click", () => {
   cameraFollowPaused = !cameraFollowPaused;
@@ -354,7 +359,7 @@ graphSvg.addEventListener("keydown", (event) => {
     event.preventDefault(); camera.x += moves[event.key][0]; camera.y += moves[event.key][1]; applyCamera();
   } else if (event.key === "+" || event.key === "=") { event.preventDefault(); zoomBy(1.2); }
   else if (event.key === "-") { event.preventDefault(); zoomBy(0.8); }
-  else if (event.key === "0") { event.preventDefault(); camera = { x: 36, y: 36, scale: 1 }; applyCamera(); }
+  else if (event.key === "0") { event.preventDefault(); resetCamera(); }
 });
 
 function connect() {
