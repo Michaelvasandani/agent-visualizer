@@ -43,7 +43,7 @@ test("executes SVG Activity Graph navigation and keeps camera pause browser-loca
   assert.equal(document.querySelectorAll(".activity-node").length, 2);
   assert.equal(document.querySelectorAll(".integrity-gap").length, 1);
 
-  const search = document.querySelector<HTMLInputElement>("#activity-search")!;
+  const search: any = document.querySelector("#activity-search");
   search.value = "future";
   search.dispatchEvent(new window.Event("input"));
   assert.equal(document.querySelectorAll(".activity-node").length, 1);
@@ -51,16 +51,16 @@ test("executes SVG Activity Graph navigation and keeps camera pause browser-loca
   search.value = "";
   search.dispatchEvent(new window.Event("input"));
 
-  const spawn = document.querySelector<SVGGElement>('[data-node-id="root/turn/spawn"]')!;
+  const spawn = document.querySelector('[data-node-id="root/turn/spawn"]')!;
   spawn.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   assert.match(document.querySelector("#selected-activity")?.textContent ?? "", /Spawn agent/);
-  const collapse = document.querySelector<HTMLButtonElement>("#collapse-branch")!;
+  const collapse: any = document.querySelector("#collapse-branch");
   assert.equal(collapse.disabled, false);
   collapse.click();
   assert.equal(document.querySelectorAll(".source-lane").length, 1);
   assert.match(collapse.textContent, /Expand/);
 
-  const filter = document.querySelector<HTMLSelectElement>("#activity-filter")!;
+  const filter: any = document.querySelector("#activity-filter");
   filter.value = "unknown";
   filter.dispatchEvent(new window.Event("change"));
   assert.equal(document.querySelectorAll(".activity-node").length, 0);
@@ -69,19 +69,19 @@ test("executes SVG Activity Graph navigation and keeps camera pause browser-loca
 
   const viewport = document.querySelector("#activity-viewport")!;
   const initialTransform = viewport.getAttribute("transform");
-  document.querySelector<HTMLButtonElement>("#zoom-in")!.click();
+  (document.querySelector("#zoom-in") as any).click();
   assert.notEqual(viewport.getAttribute("transform"), initialTransform);
-  document.querySelector<HTMLButtonElement>("#reset-view")!.click();
+  (document.querySelector("#reset-view") as any).click();
   assert.equal(viewport.getAttribute("transform"), "translate(36 36) scale(1)");
 
-  const follow = document.querySelector<HTMLButtonElement>("#camera-follow")!;
+  const follow: any = document.querySelector("#camera-follow");
   const actionsBeforePause = socket.sent.length;
   follow.click();
   assert.equal(follow.ariaPressed, "true");
   assert.equal(follow.textContent, "Resume follow");
   assert.equal(socket.sent.length, actionsBeforePause, "viewport pause must not dispatch a collection action");
 
-  document.querySelector<HTMLButtonElement>("#re-layout")!.click();
+  (document.querySelector("#re-layout") as any).click();
   assert.deepEqual(JSON.parse(socket.sent.at(-1)!), { kind: "re-layout" });
   window.close();
 });
