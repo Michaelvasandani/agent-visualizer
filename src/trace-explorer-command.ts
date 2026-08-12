@@ -10,6 +10,11 @@ import {
   startTraceExplorerServer,
   type TraceExplorerServer,
 } from "./trace-explorer-server.js";
+import {
+  createTraceExplorerSessionManager,
+  isTraceExplorerPhaseActive,
+  type TraceExplorerPhase,
+} from "./trace-explorer-session.js";
 
 const DEFAULT_APP_SERVER_URL = "ws://127.0.0.1:4500";
 
@@ -53,9 +58,16 @@ export async function launchTraceExplorer(
   const owner = ownsAppServer
     ? await dependencies.startOwnedAppServer(appServerUrl)
     : null;
+  let shutdownRequested = false;
+  const manager = createTraceExplorerSessionManager({
+    serverUrl: appServerUrl,
+    dependencies: { observeSkillRun: dependencies.observeSkillRun },
+    shouldStartConformance: () => !shutdownRequested,
+  });
   let server: TraceExplorerServer;
   try {
     server = await startTraceExplorerServer({
+      manager,
       ...(options.browserPort === undefined
         ? {}
         : { port: options.browserPort }),
@@ -69,9 +81,7 @@ export async function launchTraceExplorer(
   options.writeLine("Connect the interactive Codex TUI with:");
   options.writeLine(`codex --remote ${appServerUrl}`);
 
-  const abortController = new AbortController();
-  let observationSettled = false;
-  let shutdownRequested = false;
+  let managerPhase: TraceExplorerPhase = manager.snapshot().phase;
   let closing = false;
   let resolveExit: (exitCode: number) => void = () => undefined;
   const exited = new Promise<number>((resolve) => {
@@ -84,31 +94,26 @@ export async function launchTraceExplorer(
   ): Promise<void> => {
     if (closing) return;
     closing = true;
-    abortController.abort(new Error("Trace Explorer stopped."));
+    await manager.close();
     await server.close();
     await owner?.stop(ownerSignal);
     resolveExit(exitCode);
   };
 
-  const observation = dependencies.observeSkillRun({
-    serverUrl: appServerUrl,
-    signal: abortController.signal,
-    shouldStartConformance: () => !shutdownRequested,
-    onUpdate: (update) => server.publish(update),
-  });
-  void observation.then(
-    () => {
-      observationSettled = true;
-      if (shutdownRequested) void close(0, "SIGTERM");
-    },
-    (error: unknown) => {
-      observationSettled = true;
-      if (closing) return;
-      const message = error instanceof Error ? error.message : String(error);
-      options.writeLine(`Trace Explorer collection failed: ${message}`);
+  manager.subscribe((snapshot) => {
+    managerPhase = snapshot.phase;
+    if (snapshot.phase === "error" && !closing) {
+      options.writeLine(
+        `Trace Explorer collection failed: ${snapshot.error ?? "unknown error"}`,
+      );
       void close(1, "SIGTERM");
-    },
-  );
+      return;
+    }
+    if (shutdownRequested && !isTraceExplorerPhaseActive(snapshot.phase)) {
+      void close(0, "SIGTERM");
+    }
+  });
+  manager.start();
 
   if (options.noOpen !== true) {
     try {
@@ -123,7 +128,7 @@ export async function launchTraceExplorer(
     browserUrl: server.browserUrl,
     interrupt(): void {
       if (closing) return;
-      if (observationSettled) {
+      if (!isTraceExplorerPhaseActive(managerPhase)) {
         void close(0, "SIGTERM");
         return;
       }

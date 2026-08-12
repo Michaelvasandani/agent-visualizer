@@ -320,6 +320,254 @@ test("does not start Conformance after deferred shutdown is requested", async (t
   );
 });
 
+test("Armed State ignores a stale completed turn and observes only the next turn", async (t) => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+  server.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (request.method === "initialize") {
+        socket.send(JSON.stringify({
+          id: request.id,
+          result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+        }));
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(JSON.stringify({
+          id: request.id,
+          result: { data: ["armed-thread"], nextCursor: null },
+        }));
+      } else if (request.method === "thread/resume") {
+        socket.send(JSON.stringify({
+          id: request.id,
+          result: {
+            thread: {
+              id: "armed-thread",
+              turns: [{
+                id: "stale-turn",
+                status: "completed",
+                itemsView: "full",
+                items: [{
+                  id: "stale-input",
+                  type: "userMessage",
+                  content: [{ type: "text", text: "old work" }],
+                }],
+              }],
+            },
+          },
+        }));
+        setImmediate(() => {
+          socket.send(JSON.stringify({
+            method: "item/started",
+            params: {
+              threadId: "armed-thread",
+              turnId: "ordinary-turn",
+              item: {
+                id: "ordinary-input",
+                type: "userMessage",
+                content: [{ type: "text", text: "ordinary work" }],
+              },
+            },
+          }));
+          socket.send(JSON.stringify({
+            method: "turn/completed",
+            params: {
+              threadId: "armed-thread",
+              turn: { id: "ordinary-turn", status: "completed", items: [] },
+            },
+          }));
+          socket.send(JSON.stringify({
+            method: "item/started",
+            params: {
+              threadId: "armed-thread",
+              turnId: "dollar-turn",
+              item: {
+                id: "dollar-input",
+                type: "userMessage",
+                content: [{ type: "text", text: "check $HOME and discuss $code-review" }],
+              },
+            },
+          }));
+          socket.send(JSON.stringify({
+            method: "turn/completed",
+            params: {
+              threadId: "armed-thread",
+              turn: { id: "dollar-turn", status: "completed", items: [] },
+            },
+          }));
+          socket.send(JSON.stringify({
+            method: "item/started",
+            params: {
+              threadId: "armed-thread",
+              turnId: "next-turn",
+              item: {
+                id: "next-input",
+                type: "userMessage",
+                content: [{
+                  type: "skill",
+                  name: "fixture-skill",
+                  path: "/fixture/SKILL.md",
+                }],
+              },
+            },
+          }));
+          socket.send(JSON.stringify({
+            method: "turn/completed",
+            params: {
+              threadId: "armed-thread",
+              turn: { id: "next-turn", status: "completed", items: [] },
+            },
+          }));
+        });
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+  const address = server.address() as AddressInfo;
+  const updates: ObservationUpdate[] = [];
+
+  const observation = await observeSkillRun({
+    serverUrl: `ws://127.0.0.1:${address.port}`,
+    turnSelection: "active-or-next",
+    onUpdate: (update) => updates.push(update),
+  });
+
+  assert.deepEqual(
+    updates
+      .filter((update) => update.kind === "lifecycle")
+      .map((update) => update.state),
+    [
+      "connecting",
+      "selecting-thread",
+      "armed",
+      "observing",
+      "evaluating",
+      "completed",
+    ],
+  );
+  assert.equal(observation.events.some((event) => event.id.includes("stale")), false);
+  assert.equal(observation.events.some((event) => event.id.includes("ordinary")), false);
+  assert.equal(observation.events.some((event) => event.id.includes("dollar")), false);
+  assert.equal(observation.events.some((event) => event.id.includes("next-input")), true);
+});
+
+test("active-or-next reconstructs the active turn instead of entering Armed State", async (t) => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+  server.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (request.method === "initialize") {
+        socket.send(JSON.stringify({
+          id: request.id,
+          result: { userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)" },
+        }));
+      } else if (request.method === "thread/loaded/list") {
+        socket.send(JSON.stringify({
+          id: request.id,
+          result: { data: ["active-thread"], nextCursor: null },
+        }));
+      } else if (request.method === "thread/resume") {
+        socket.send(JSON.stringify({
+          id: request.id,
+          result: {
+            thread: {
+              id: "active-thread",
+              turns: [{
+                id: "active-turn",
+                status: "inProgress",
+                itemsView: "full",
+                items: [{
+                  id: "active-input",
+                  type: "userMessage",
+                  content: [{
+                    type: "skill",
+                    name: "fixture-skill",
+                    path: "/fixture/SKILL.md",
+                  }],
+                }],
+              }],
+            },
+          },
+        }));
+        setImmediate(() => socket.send(JSON.stringify({
+          method: "turn/completed",
+          params: {
+            threadId: "active-thread",
+            turn: { id: "active-turn", status: "completed", items: [] },
+          },
+        })));
+      } else if (request.method === "thread/unsubscribe") {
+        socket.send(JSON.stringify({ id: request.id, result: {} }));
+      }
+    });
+  });
+  const address = server.address() as AddressInfo;
+  const updates: ObservationUpdate[] = [];
+
+  const observation = await observeSkillRun({
+    serverUrl: `ws://127.0.0.1:${address.port}`,
+    turnSelection: "active-or-next",
+    onUpdate: (update) => updates.push(update),
+  });
+
+  assert.equal(
+    updates.some((update) => update.kind === "lifecycle" && update.state === "armed"),
+    false,
+  );
+  assert.equal(observation.events.some((event) => event.id.includes("active-input")), true);
+});
+
+test("active-or-next recognizes the supported Codex Root Skill placeholder shape", async (t) => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+  server.on("connection", (socket) => socket.on("message", (data) => {
+    const request = JSON.parse(data.toString()) as Record<string, unknown>;
+    if (request.method === "initialize") {
+      socket.send(JSON.stringify({ id: request.id, result: {
+        userAgent: "agent-tracer/0.145.0 (Mac OS; arm64)",
+      } }));
+    } else if (request.method === "thread/loaded/list") {
+      socket.send(JSON.stringify({ id: request.id, result: {
+        data: ["placeholder-thread"], nextCursor: null,
+      } }));
+    } else if (request.method === "thread/resume") {
+      socket.send(JSON.stringify({ id: request.id, result: { thread: {
+        id: "placeholder-thread",
+        turns: [{ id: "placeholder-turn", status: "inProgress", itemsView: "full", items: [{
+          id: "placeholder-input", type: "userMessage", content: [{
+            type: "text", text: "$acceptance-code-review", text_elements: [{
+              byteRange: { start: 0, end: 23 }, placeholder: "$acceptance-code-review",
+            }],
+          }],
+        }] }],
+      } } }));
+      setImmediate(() => socket.send(JSON.stringify({ method: "turn/completed", params: {
+        threadId: "placeholder-thread",
+        turn: { id: "placeholder-turn", status: "completed", items: [] },
+      } })));
+    } else if (request.method === "thread/unsubscribe") {
+      socket.send(JSON.stringify({ id: request.id, result: {} }));
+    }
+  }));
+  const address = server.address() as AddressInfo;
+  const updates: ObservationUpdate[] = [];
+
+  await observeSkillRun({
+    serverUrl: `ws://127.0.0.1:${address.port}`,
+    turnSelection: "active-or-next",
+    onUpdate: (update) => updates.push(update),
+  });
+
+  assert.equal(
+    updates.some((update) => update.kind === "lifecycle" && update.state === "armed"),
+    false,
+  );
+});
+
 test("aborts active collection by closing only the Tracer subscription", async (t) => {
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise<void>((resolve) => server.once("listening", resolve));

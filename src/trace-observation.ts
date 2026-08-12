@@ -37,6 +37,7 @@ export interface TraceGap {
 export type ObservationLifecycleState =
   | "connecting"
   | "selecting-thread"
+  | "armed"
   | "observing"
   | "recovering"
   | "evaluating"
@@ -103,6 +104,7 @@ export interface ObserveSkillRunOptions {
   readonly serverUrl: string;
   readonly signal?: AbortSignal;
   readonly shouldStartConformance?: () => boolean;
+  readonly turnSelection?: "latest" | "active-or-next";
   readonly selectThread?: (threadIds: readonly string[]) => Promise<string>;
   readonly confirmHistoricalRootSkill?: (
     rootSkill: RootSkillSelection,
@@ -217,7 +219,10 @@ export async function observeSkillRun(
     const threadId = selection.threadId;
     emitUpdate(emit, { kind: "thread-selected", ...selection });
     emitUpdate(emit, { kind: "evaluation-state", state: "not-started" });
-    emitUpdate(emit, { kind: "lifecycle", state: "observing" });
+    const turnSelection = options.turnSelection ?? "latest";
+    if (turnSelection === "latest") {
+      emitUpdate(emit, { kind: "lifecycle", state: "observing" });
+    }
 
     const observation = await observeResumedThread(
       options.serverUrl,
@@ -225,6 +230,7 @@ export async function observeSkillRun(
       threadId,
       emit,
       options.signal,
+      turnSelection,
     );
     client = observation.client;
     emitUpdate(emit, {
@@ -386,6 +392,7 @@ async function observeResumedThread(
   threadId: string,
   emit: (update: ObservationUpdate) => void,
   signal?: AbortSignal,
+  turnSelection: "latest" | "active-or-next" = "latest",
 ): Promise<ThreadObservation> {
   const pipeline = new EventPipeline(threadId, (event) =>
     emitUpdate(emit, { kind: "event", event }),
@@ -410,6 +417,8 @@ async function observeResumedThread(
           threadId,
           pipeline,
           selectedTurnId,
+          turnSelection,
+          (state) => emitUpdate(emit, { kind: "lifecycle", state }),
         );
       } catch (error) {
         if (recoveryCheckpoint === null) throw error;
@@ -444,7 +453,7 @@ async function observeResumedThread(
       ) {
         emitUpdate(emit, {
           kind: "lifecycle",
-          state: "observing",
+          state: selectedTurnId === null ? "armed" : "observing",
           recoveryComplete: true,
         });
       }
@@ -495,6 +504,8 @@ async function observeConnection(
   threadId: string,
   pipeline: EventPipeline,
   selectedTurnId: string | null,
+  turnSelection: "latest" | "active-or-next",
+  reportTurnState: (state: "armed" | "observing") => void,
 ): Promise<{
   readonly response: ThreadResumeResponse;
   readonly selectedTurnId: string | null;
@@ -515,6 +526,8 @@ async function observeConnection(
   });
 
   let observedTurnId = selectedTurnId;
+  let observingWasReported =
+    selectedTurnId !== null || turnSelection === "latest";
   const processNotification = (notification: JsonObject): void => {
     const params = asObject(notification.params);
     if (params === null) return;
@@ -526,9 +539,19 @@ async function observeConnection(
     ) {
       turnlessRootNotificationMethods.add(method);
     }
-    const scoped = scopeRootNotification(params, threadId, observedTurnId);
+    const scoped = scopeRootNotification(
+      method,
+      params,
+      threadId,
+      observedTurnId,
+      turnSelection === "latest",
+    );
     observedTurnId = scoped.selectedTurnId;
     if (!scoped.include) return;
+    if (!observingWasReported && observedTurnId !== null) {
+      observingWasReported = true;
+      reportTurnState("observing");
+    }
     pipeline.append(method, params, ["live"]);
     if (method === "turn/completed" && params.threadId === threadId) {
       const turn = asObject(params.turn);
@@ -560,8 +583,17 @@ async function observeConnection(
     const selectedHistory = selectedSkillRunHistory(
       response.thread.turns,
       observedTurnId,
+      turnSelection,
     );
     observedTurnId = selectedHistory.turnId;
+    if (turnSelection === "active-or-next") {
+      if (observedTurnId === null) {
+        reportTurnState("armed");
+      } else if (!observingWasReported) {
+        observingWasReported = true;
+        reportTurnState("observing");
+      }
+    }
     const selectedTurns = selectedHistory.turns;
     rootTurnWindow = mergeTurnWindows(
       rootTurnWindow,
@@ -590,15 +622,25 @@ async function observeConnection(
           return false;
         }
         const scoped = scopeRootNotification(
+          typeof notification.method === "string" ? notification.method : "",
           params,
           threadId,
           observedTurnId,
+          turnSelection === "latest",
         );
         observedTurnId = scoped.selectedTurnId;
         return scoped.include;
       },
     );
     pipeline.replay(threadId, selectedTurns, selectedBufferedNotifications);
+    if (
+      turnSelection === "active-or-next" &&
+      !observingWasReported &&
+      observedTurnId !== null
+    ) {
+      observingWasReported = true;
+      reportTurnState("observing");
+    }
     replayingHistory = false;
     for (const notification of selectedBufferedNotifications) {
       processNotification(notification);
@@ -807,13 +849,23 @@ function selectedThreadItemHistoryIsFull(
 function selectedSkillRunHistory(
   turns: readonly HistoryTurn[],
   selectedTurnId: string | null,
+  turnSelection: "latest" | "active-or-next",
 ): {
   readonly turnId: string | null;
   readonly turns: readonly HistoryTurn[];
 } {
+  const latestTurn = turns.at(-1);
+  const latestIsActiveSkillRun =
+    latestTurn !== undefined &&
+    terminalOutcomeFromHistory([latestTurn]) === null &&
+    turnContainsRootSkillInvocation(latestTurn);
   const selectedTurn =
     selectedTurnId === null
-      ? turns.at(-1)
+      ? turnSelection === "active-or-next"
+        ? latestIsActiveSkillRun
+          ? latestTurn
+          : undefined
+        : latestTurn
       : turns.find((turn) => turn.id === selectedTurnId);
   if (
     selectedTurnId !== null &&
@@ -836,19 +888,45 @@ function notificationTurnId(params: JsonObject): string | null {
 }
 
 function scopeRootNotification(
+  method: string,
   params: JsonObject,
   rootThreadId: string,
   selectedTurnId: string | null,
+  allowUnpinnedDescendants: boolean,
 ): { readonly selectedTurnId: string | null; readonly include: boolean } {
   if (params.threadId !== rootThreadId) {
-    return { selectedTurnId, include: true };
+    return {
+      selectedTurnId,
+      include: selectedTurnId !== null || allowUnpinnedDescendants,
+    };
   }
   const turnId = notificationTurnId(params);
   if (turnId === null) return { selectedTurnId, include: false };
   if (selectedTurnId === null) {
-    return { selectedTurnId: turnId, include: true };
+    return allowUnpinnedDescendants ||
+      notificationStartsRootSkillInvocation(method, params)
+      ? { selectedTurnId: turnId, include: true }
+      : { selectedTurnId, include: false };
   }
   return { selectedTurnId, include: turnId === selectedTurnId };
+}
+
+function turnContainsRootSkillInvocation(turn: HistoryTurn): boolean {
+  return turn.items.some((item) => userMessageContainsRootSkill(item));
+}
+
+function notificationStartsRootSkillInvocation(
+  method: string,
+  params: JsonObject,
+): boolean {
+  if (method !== "item/started" && method !== "item/completed") return false;
+  const item = asObject(params.item);
+  return item !== null && userMessageContainsRootSkill(item);
+}
+
+function userMessageContainsRootSkill(item: JsonObject): boolean {
+  const evidence = rootSkillEvidence(item);
+  return evidence.selections.length > 0 || evidence.placeholders.length > 0;
 }
 
 function turnWindow(turn: JsonObject | HistoryTurn | null): TurnWindow {
@@ -1076,9 +1154,18 @@ function structuredSkillSelections(
     return [];
   }
   const item = asObject(event.payload.item);
-  if (item?.type !== "userMessage" || !Array.isArray(item.content)) return [];
+  return item === null ? [] : rootSkillEvidence(item).selections;
+}
 
+function rootSkillEvidence(item: JsonObject): {
+  readonly selections: readonly RootSkillSelection[];
+  readonly placeholders: readonly string[];
+} {
+  if (item.type !== "userMessage" || !Array.isArray(item.content)) {
+    return { selections: [], placeholders: [] };
+  }
   const selections: RootSkillSelection[] = [];
+  const placeholders: string[] = [];
   for (const contentItem of item.content) {
     const content = asObject(contentItem);
     if (
@@ -1088,8 +1175,23 @@ function structuredSkillSelections(
     ) {
       selections.push({ name: content.name, path: content.path });
     }
+    if (content?.type !== "text") continue;
+    const elements = Array.isArray(content.text_elements)
+      ? content.text_elements
+      : Array.isArray(content.textElements)
+        ? content.textElements
+        : [];
+    for (const element of elements) {
+      const placeholder = asObject(element)?.placeholder;
+      if (
+        typeof placeholder === "string" &&
+        /^\$[a-z\d][\w:-]*$/i.test(placeholder.trim())
+      ) {
+        placeholders.push(placeholder.trim());
+      }
+    }
   }
-  return selections;
+  return { selections, placeholders };
 }
 
 function uniqueRootSkills(

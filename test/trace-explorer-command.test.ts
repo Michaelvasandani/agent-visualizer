@@ -15,6 +15,7 @@ import type {
   ObserveSkillRunOptions,
   SkillRunObservation,
 } from "../src/trace-observation.js";
+import { completedObservation } from "./trace-explorer-fixtures.js";
 
 function deferred<T>(): {
   readonly promise: Promise<T>;
@@ -27,21 +28,17 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
-function completedObservation(): SkillRunObservation {
-  return {
+function emitActiveRun(options: ObserveSkillRunOptions): void {
+  options.onUpdate?.({
+    kind: "loaded-threads",
+    threadIds: ["thread-one"],
+  });
+  options.onUpdate?.({
+    kind: "thread-selected",
     threadId: "thread-one",
-    cwd: null,
-    lifecycleState: "completed",
-    evaluationState: "skipped",
-    evaluationError: null,
-    events: [],
-    gaps: [],
-    terminalOutcome: { kind: "completed" },
-    skillAttribution: { kind: "unresolved", reason: "fixture" },
-    skillContract: null,
-    obligations: [],
-    findings: [],
-  };
+    automatic: true,
+  });
+  options.onUpdate?.({ kind: "lifecycle", state: "observing" });
 }
 
 function fakeOwner(stopSignals: NodeJS.Signals[]): OwnedAppServer {
@@ -118,6 +115,7 @@ test("owns the default shared App Server, prints launch commands, and opens the 
     },
     observeSkillRun: async (options) => {
       observedUrls.push(options.serverUrl);
+      emitActiveRun(options);
       return completedObservation();
     },
     openBrowser: async (url) => {
@@ -162,6 +160,7 @@ test("uses --server without ownership and honors --no-open", async () => {
       },
       observeSkillRun: async (options) => {
         observedOptions = options;
+        emitActiveRun(options);
         return completedObservation();
       },
       openBrowser: async () => {
@@ -189,6 +188,7 @@ test("defers an active interrupt until observation and Conformance settle", asyn
       startOwnedAppServer: async () => fakeOwner(stopSignals),
       observeSkillRun: async (options) => {
         shouldStartConformance = options.shouldStartConformance;
+        emitActiveRun(options);
         return observation.promise;
       },
       openBrowser: async () => undefined,
@@ -222,6 +222,7 @@ test("a second interrupt forces Tracer shutdown without stopping an external App
         throw new Error("must not own the external server");
       },
       observeSkillRun: async (options) => {
+        emitActiveRun(options);
         options.signal?.addEventListener("abort", () => {
           aborted = true;
           observation.resolve(completedObservation());
@@ -248,6 +249,7 @@ test("a second interrupt forcibly terminates an owned App Server", async () => {
     {
       startOwnedAppServer: async () => fakeOwner(stopSignals),
       observeSkillRun: async (options) => {
+        emitActiveRun(options);
         options.signal?.addEventListener("abort", () => {
           observation.resolve(completedObservation());
         });

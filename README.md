@@ -37,11 +37,20 @@ without stopping that server:
 npm start -- web --server ws://127.0.0.1:4500 --no-open
 ```
 
-Browser refreshes and disconnects do not stop collection. Each browser socket
-receives the complete in-memory update snapshot on connection and structured
-incremental updates afterward. During active observation, the first interrupt
-defers shutdown until observation and already-started Conformance work settle;
-a second interrupt forces shutdown and may interrupt an owned Codex App Server.
+The Explorer automatically selects the sole loaded Observable Session and
+requires an explicit browser choice when several are loaded. It attaches to an
+active turn and reconstructs its available history; when no turn is active it
+enters Armed State and waits for the next turn instead of selecting stale
+completed work. Observable Session switching is disabled while observation or
+Conformance is active.
+
+Browser refreshes and disconnects do not stop collection. The local process
+owns the active Skill Run and the completed process-lifetime Run List, and every
+browser connection receives the complete in-memory state before incremental
+updates. After evaluation, choose **Trace Next Run** explicitly to return to
+Armed State. During active observation, the first interrupt defers shutdown
+until observation and already-started Conformance work settle; a second
+interrupt forces shutdown and may interrupt an owned Codex App Server.
 
 ## Run a live Trace in the terminal
 

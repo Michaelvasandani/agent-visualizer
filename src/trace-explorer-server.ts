@@ -3,7 +3,11 @@ import type { AddressInfo } from "node:net";
 
 import WebSocket, { WebSocketServer } from "ws";
 
-import type { ObservationUpdate } from "./trace-observation.js";
+import type {
+  TraceExplorerBrowserAction,
+  TraceExplorerSessionManager,
+  TraceExplorerSnapshot,
+} from "./trace-explorer-session.js";
 
 const LOOPBACK_HOST = "127.0.0.1";
 
@@ -19,45 +23,109 @@ const HTML = `<!doctype html>
     <main>
       <h1>Trace Explorer</h1>
       <p id="connection">Connecting to the local Tracer…</p>
+      <label for="sessions">Observable Session</label>
+      <select id="sessions"></select>
+      <p>State: <strong id="phase">Connecting</strong></p>
+      <p>Conformance: <strong id="evaluation">not-started</strong></p>
+      <button id="trace-next" type="button" hidden>Trace Next Run</button>
+      <h2>Run List</h2>
+      <ol id="runs"></ol>
     </main>
     <script type="module" src="/assets/app.js"></script>
   </body>
 </html>`;
 
 const SCRIPT = `const status = document.querySelector("#connection");
+const sessionSelect = document.querySelector("#sessions");
+const phase = document.querySelector("#phase");
+const evaluation = document.querySelector("#evaluation");
+const traceNext = document.querySelector("#trace-next");
+const runList = document.querySelector("#runs");
 const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-const socket = new WebSocket(protocol + "//" + location.host + "/live");
-socket.addEventListener("open", () => { status.textContent = "Connected to the local Tracer."; });
-socket.addEventListener("close", () => { status.textContent = "Disconnected from the local Tracer."; });`;
+let socket;
+
+function send(action) {
+  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(action));
+}
+
+function render(snapshot) {
+  phase.textContent = snapshot.phase;
+  evaluation.textContent = snapshot.evaluationState;
+  sessionSelect.replaceChildren();
+  if (snapshot.sessions.length !== 1 && snapshot.selectedSessionId === null) {
+    const prompt = document.createElement("option");
+    prompt.textContent = "Choose a session…";
+    prompt.value = "";
+    sessionSelect.append(prompt);
+  }
+  for (const sessionId of snapshot.sessions) {
+    const option = document.createElement("option");
+    option.value = sessionId;
+    option.textContent = sessionId;
+    option.selected = sessionId === snapshot.selectedSessionId;
+    sessionSelect.append(option);
+  }
+  sessionSelect.disabled = snapshot.sessionSwitchingLocked;
+  traceNext.hidden = snapshot.phase !== "completed";
+  runList.replaceChildren();
+  for (const run of snapshot.runs) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = run.id + " · " + run.sessionId + " · " + run.status;
+    button.ariaPressed = String(run.id === snapshot.viewedRunId);
+    button.addEventListener("click", () => send({ kind: "select-run", runId: run.id }));
+    item.append(button);
+    runList.append(item);
+  }
+}
+
+sessionSelect.addEventListener("change", () => {
+  if (sessionSelect.value !== "") {
+    send({ kind: "select-session", sessionId: sessionSelect.value });
+  }
+});
+traceNext.addEventListener("click", () => send({ kind: "trace-next-run" }));
+
+function connect() {
+  socket = new WebSocket(protocol + "//" + location.host + "/live");
+  socket.addEventListener("open", () => { status.textContent = "Connected to the local Tracer."; });
+  socket.addEventListener("message", (event) => {
+    const message = JSON.parse(event.data);
+    if (message.kind === "snapshot" || message.kind === "update") render(message.snapshot);
+  });
+  socket.addEventListener("close", () => {
+    status.textContent = "Disconnected from the local Tracer; reconnecting…";
+    setTimeout(connect, 500);
+  });
+}
+connect();`;
 
 const STYLE = `:root { color-scheme: light dark; font-family: ui-monospace, monospace; }
 body { margin: 0; min-height: 100vh; display: grid; place-items: center; }
-main { max-width: 38rem; padding: 2rem; }
-h1 { margin-block: 0 0.75rem; }`;
-
-export interface TraceExplorerSnapshot {
-  readonly revision: number;
-  readonly updates: readonly ObservationUpdate[];
-}
+main { width: min(42rem, calc(100% - 4rem)); padding: 2rem; }
+h1 { margin-block: 0 0.75rem; }
+select, button { font: inherit; }
+#runs { padding-inline-start: 1.5rem; }
+#runs button { margin-block: 0.25rem; }`;
 
 export type TraceExplorerBrowserMessage =
   | { readonly kind: "snapshot"; readonly snapshot: TraceExplorerSnapshot }
   | {
       readonly kind: "update";
       readonly revision: number;
-      readonly update: ObservationUpdate;
+      readonly snapshot: TraceExplorerSnapshot;
     };
 
 export interface TraceExplorerServer {
   readonly browserUrl: string;
-  publish(update: ObservationUpdate): void;
   close(): Promise<void>;
 }
 
 export async function startTraceExplorerServer(options: {
   readonly port?: number;
-} = {}): Promise<TraceExplorerServer> {
-  const updates: ObservationUpdate[] = [];
+  readonly manager: TraceExplorerSessionManager;
+}): Promise<TraceExplorerServer> {
   const sockets = new Set<WebSocket>();
   const httpServer = createHttpServer();
   const socketServer = new WebSocketServer({ noServer: true });
@@ -80,26 +148,33 @@ export async function startTraceExplorerServer(options: {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
     socket.on("error", () => sockets.delete(socket));
+    socket.on("message", (data) => {
+      const action = parseBrowserAction(data.toString());
+      if (action !== null) options.manager.dispatch(action);
+    });
     send(socket, {
       kind: "snapshot",
-      snapshot: freezeSnapshot(updates),
+      snapshot: options.manager.snapshot(),
     });
+  });
+
+  const unsubscribe = options.manager.subscribe((snapshot) => {
+    const message: TraceExplorerBrowserMessage = Object.freeze({
+      kind: "update",
+      revision: snapshot.revision,
+      snapshot,
+    });
+    for (const socket of sockets) send(socket, message);
   });
 
   let closePromise: Promise<void> | undefined;
   return Object.freeze({
     browserUrl,
-    publish(update: ObservationUpdate): void {
-      updates.push(update);
-      const message: TraceExplorerBrowserMessage = Object.freeze({
-        kind: "update",
-        revision: updates.length,
-        update,
-      });
-      for (const socket of sockets) send(socket, message);
-    },
     close(): Promise<void> {
-      closePromise ??= closeServers(httpServer, socketServer, sockets);
+      if (closePromise === undefined) {
+        unsubscribe();
+        closePromise = closeServers(httpServer, socketServer, sockets);
+      }
       return closePromise;
     },
   });
@@ -154,18 +229,37 @@ async function listen(server: HttpServer, port: number): Promise<void> {
   });
 }
 
-function freezeSnapshot(
-  updates: readonly ObservationUpdate[],
-): TraceExplorerSnapshot {
-  return Object.freeze({
-    revision: updates.length,
-    updates: Object.freeze([...updates]),
-  });
-}
-
 function send(socket: WebSocket, message: TraceExplorerBrowserMessage): void {
   if (socket.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify(message));
+}
+
+function parseBrowserAction(source: string): TraceExplorerBrowserAction | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(source);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null || !("kind" in value)) {
+    return null;
+  }
+  if (value.kind === "trace-next-run") return { kind: value.kind };
+  if (
+    value.kind === "select-session" &&
+    "sessionId" in value &&
+    typeof value.sessionId === "string"
+  ) {
+    return { kind: value.kind, sessionId: value.sessionId };
+  }
+  if (
+    value.kind === "select-run" &&
+    "runId" in value &&
+    typeof value.runId === "string"
+  ) {
+    return { kind: value.kind, runId: value.runId };
+  }
+  return null;
 }
 
 async function closeServers(
